@@ -15,6 +15,13 @@ AmenityCategory = Literal[
 class ParsedQuery(BaseModel):
     """Structured filters extracted from a user's natural-language rental prompt."""
 
+    # Scope guard — the parser sets these to true when the user's prompt is
+    # not a Canadian rental search (off-topic, prompt-injection, abuse, etc.).
+    # The route short-circuits and returns rejection_reason without running
+    # retrieval or generation.
+    out_of_scope: bool = False
+    rejection_reason: str = ""
+
     # Location
     city: str | None = None
     province: str | None = None

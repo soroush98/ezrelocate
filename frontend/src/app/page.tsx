@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { AccountBar } from "@/components/AccountBar";
 import { ListingsMap } from "@/components/Map";
 import { QueryPanel } from "@/components/QueryPanel";
 import type {
@@ -63,6 +64,13 @@ export default function Home() {
           onSelect={(id) => setSelectedId((prev) => (prev === id ? null : id))}
         />
       </div>
+      {/* Floating account controls in the top-right corner */}
+      <div className="pointer-events-none absolute right-4 top-4 z-40 flex items-center gap-2">
+        <div className="pointer-events-auto rounded-full bg-white/95 px-2 py-1.5 shadow-md backdrop-blur">
+          <AccountBar />
+        </div>
+      </div>
+
       {/* Map: explicit absolute positioning so its container has a definite size
           when MapLibre measures it. */}
       <div className="absolute left-[500px] right-0 top-0 bottom-0">

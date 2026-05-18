@@ -2,9 +2,16 @@
 
 import { useEffect, useState } from "react";
 import type { RecommendationResponse } from "@/lib/types";
+import { apiFetch, startCheckout, useMe } from "@/lib/auth";
 import { ArrowRightIcon, FlameIcon, SearchIcon, SparkIcon } from "./Icon";
 import { FilterChips } from "./FilterChips";
 import { ListingCard } from "./ListingCard";
+import { AuthModal } from "./AuthModal";
+
+type QuotaBlock =
+  | { kind: "signup_required"; message: string }
+  | { kind: "subscription_required"; message: string }
+  | { kind: "daily_limit_reached"; message: string };
 
 const SAMPLES = [
   { label: "Toronto · 1BR · pets · subway",
@@ -33,11 +40,15 @@ type Props = {
 };
 
 export function QueryPanel({ onResult, selectedId, hoveredId, onHover, onSelect }: Props) {
+  const { me, refresh: refreshMe } = useMe();
   const [query, setQuery] = useState(SAMPLES[0].q);
   const [loading, setLoading] = useState(false);
   const [stage, setStage] = useState(0);
   const [result, setResult] = useState<RecommendationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [quotaBlock, setQuotaBlock] = useState<QuotaBlock | null>(null);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [checkoutBusy, setCheckoutBusy] = useState(false);
 
   // Cycle the loading stage so the spinner shows visible progress
   useEffect(() => {
@@ -53,14 +64,27 @@ export function QueryPanel({ onResult, selectedId, hoveredId, onHover, onSelect 
     setLoading(true);
     setStage(0);
     setError(null);
+    setQuotaBlock(null);
     setResult(null);
     onResult(null);
     try {
-      const res = await fetch("/api/query", {
+      const res = await apiFetch("/api/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: q }),
       });
+      if (res.status === 402 || res.status === 429) {
+        // Structured quota errors from the backend.
+        const body = await res.json().catch(() => null);
+        const detail = body?.detail ?? {};
+        const code = detail.code as QuotaBlock["kind"] | undefined;
+        const message = (detail.message as string | undefined) ?? `HTTP ${res.status}`;
+        if (code === "signup_required" || code === "subscription_required" || code === "daily_limit_reached") {
+          setQuotaBlock({ kind: code, message });
+          onResult(null);
+          return;
+        }
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: RecommendationResponse = await res.json();
       setResult(data);
@@ -70,6 +94,18 @@ export function QueryPanel({ onResult, selectedId, hoveredId, onHover, onSelect 
       onResult(null);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function onSubscribe() {
+    setCheckoutBusy(true);
+    try {
+      const url = await startCheckout();
+      window.location.href = url;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCheckoutBusy(false);
     }
   }
 
@@ -147,6 +183,54 @@ export function QueryPanel({ onResult, selectedId, hoveredId, onHover, onSelect 
             {error}
           </div>
         )}
+
+        {!loading && quotaBlock && (
+          <div className="mx-6 mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4">
+            <div className="text-sm font-medium text-amber-900">
+              {quotaBlock.kind === "signup_required" && "Free searches used up"}
+              {quotaBlock.kind === "subscription_required" && "Subscribe to continue"}
+              {quotaBlock.kind === "daily_limit_reached" && "Daily limit reached"}
+            </div>
+            <div className="mt-1 text-xs text-amber-800">{quotaBlock.message}</div>
+            <div className="mt-3 flex gap-2">
+              {quotaBlock.kind === "signup_required" && (
+                <button
+                  onClick={() => setAuthOpen(true)}
+                  className="rounded-lg bg-ink px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700"
+                >
+                  Sign up
+                </button>
+              )}
+              {(quotaBlock.kind === "subscription_required" ||
+                (quotaBlock.kind === "signup_required" && me?.authenticated)) && (
+                <button
+                  onClick={onSubscribe}
+                  disabled={checkoutBusy}
+                  className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700 disabled:bg-slate-300"
+                >
+                  {checkoutBusy ? "…" : "Subscribe — $X/mo"}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        <AuthModal
+          open={authOpen}
+          initialMode="signup"
+          onClose={() => setAuthOpen(false)}
+          onSuccess={() => {
+            setAuthOpen(false);
+            refreshMe();
+            // After signup, the user still needs to subscribe. Surface the
+            // subscribe CTA by switching the quota block accordingly.
+            setQuotaBlock({
+              kind: "subscription_required",
+              message: "You're signed in. Subscribe to unlock 50 searches/day.",
+            });
+          }}
+        />
+
 
         {!loading && result && (
           <div className="px-6 pb-8 pt-5">
