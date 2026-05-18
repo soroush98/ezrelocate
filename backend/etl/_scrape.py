@@ -1,0 +1,227 @@
+"""Shared scraping helpers: polite HTTP client, listing upsert, ID extraction.
+
+Both Kijiji and rentals.ca scrapers use these. The HTTP client throttles concurrent
+requests (semaphore) and inserts a per-request jitter so we don't hammer sites.
+"""
+
+import asyncio
+import random
+import re
+from dataclasses import dataclass, field
+from datetime import date
+from typing import Any
+
+import httpx
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+from etl._common import connect
+
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.0 Safari/605.1.15 "
+    "(+relocate portfolio crawler; contact: esmailian98@gmail.com)"
+)
+
+
+@dataclass
+class ScrapedListing:
+    source: str
+    source_id: str
+    url: str
+    title: str | None = None
+    address: str | None = None
+    city: str = ""
+    province: str = ""
+    postal_code: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+    monthly_rent: int | None = None
+    bedrooms: float | None = None
+    bathrooms: float | None = None
+    sqft: int | None = None
+    property_type: str | None = None
+    furnished: bool | None = None
+    pet_friendly: bool | None = None
+    utilities_included: list[str] = field(default_factory=list)
+    lease_length_months: int | None = None
+    available_from: date | None = None
+    description: str | None = None
+
+
+class PoliteClient:
+    """Async HTTP client with a concurrency cap and per-request jitter."""
+
+    def __init__(
+        self,
+        *,
+        max_concurrency: int = 3,
+        min_delay_ms: int = 500,
+        max_delay_ms: int = 1500,
+        timeout: float = 30.0,
+    ) -> None:
+        self._sem = asyncio.Semaphore(max_concurrency)
+        self._min = min_delay_ms / 1000
+        self._max = max_delay_ms / 1000
+        self._client = httpx.AsyncClient(
+            timeout=timeout,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-CA,en;q=0.9",
+            },
+            follow_redirects=True,
+        )
+
+    async def __aenter__(self) -> "PoliteClient":
+        return self
+
+    async def __aexit__(self, *args) -> None:
+        await self._client.aclose()
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=20))
+    async def get(self, url: str) -> httpx.Response:
+        async with self._sem:
+            await asyncio.sleep(random.uniform(self._min, self._max))
+            r = await self._client.get(url)
+            r.raise_for_status()
+            return r
+
+
+_PROVINCE_NAMES = {
+    "alberta": "AB",
+    "british columbia": "BC",
+    "manitoba": "MB",
+    "new brunswick": "NB",
+    "newfoundland and labrador": "NL",
+    "nova scotia": "NS",
+    "ontario": "ON",
+    "prince edward island": "PE",
+    "quebec": "QC",
+    "québec": "QC",
+    "saskatchewan": "SK",
+    "northwest territories": "NT",
+    "nunavut": "NU",
+    "yukon": "YT",
+}
+
+
+def normalise_province(value: str | None) -> str | None:
+    if not value:
+        return None
+    v = value.strip()
+    if len(v) == 2 and v.isalpha():
+        return v.upper()
+    return _PROVINCE_NAMES.get(v.lower())
+
+
+_PRICE_RE = re.compile(r"[\d,]+(?:\.\d{1,2})?")
+
+
+def parse_money(value: Any) -> int | None:
+    """Pull a $-amount out of a string or number, return as integer dollars."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    m = _PRICE_RE.search(str(value).replace(",", ""))
+    if not m:
+        return None
+    try:
+        return int(float(m.group()))
+    except ValueError:
+        return None
+
+
+async def upsert_listings(rows: list[ScrapedListing]) -> tuple[int, int]:
+    """Bulk-upsert scraped listings. Returns (inserted, updated_existing)."""
+    if not rows:
+        return 0, 0
+
+    sql = """
+        INSERT INTO listings (
+            source, source_id, url, title, address, city, province, postal_code,
+            location, monthly_rent, bedrooms, bathrooms, sqft, property_type,
+            furnished, pet_friendly, utilities_included, lease_length_months,
+            available_from, description, first_seen_at, last_seen_at, status
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8,
+            CASE WHEN $9::float8 IS NOT NULL AND $10::float8 IS NOT NULL
+                 THEN ST_SetSRID(ST_MakePoint($9, $10), 4326)
+                 ELSE NULL
+            END,
+            $11, $12, $13, $14, $15,
+            $16, $17, $18, $19, $20, $21,
+            NOW(), NOW(), 'active'
+        )
+        ON CONFLICT (source, source_id) DO UPDATE SET
+            url                 = EXCLUDED.url,
+            title               = EXCLUDED.title,
+            address             = EXCLUDED.address,
+            monthly_rent        = EXCLUDED.monthly_rent,
+            bedrooms            = EXCLUDED.bedrooms,
+            bathrooms           = EXCLUDED.bathrooms,
+            sqft                = EXCLUDED.sqft,
+            property_type       = EXCLUDED.property_type,
+            furnished           = EXCLUDED.furnished,
+            pet_friendly        = EXCLUDED.pet_friendly,
+            utilities_included  = EXCLUDED.utilities_included,
+            lease_length_months = EXCLUDED.lease_length_months,
+            available_from      = EXCLUDED.available_from,
+            description         = EXCLUDED.description,
+            last_seen_at        = NOW(),
+            status              = 'active'
+        RETURNING (xmax = 0) AS inserted
+    """
+
+    inserted = updated = 0
+    async with connect() as conn:
+        async with conn.transaction():
+            for r in rows:
+                row = await conn.fetchrow(
+                    sql,
+                    r.source,
+                    r.source_id,
+                    r.url,
+                    r.title,
+                    r.address,
+                    r.city,
+                    r.province,
+                    r.postal_code,
+                    r.lng,
+                    r.lat,
+                    r.monthly_rent,
+                    r.bedrooms,
+                    r.bathrooms,
+                    r.sqft,
+                    r.property_type,
+                    r.furnished,
+                    r.pet_friendly,
+                    r.utilities_included,
+                    r.lease_length_months,
+                    r.available_from,
+                    r.description,
+                )
+                if row["inserted"]:
+                    inserted += 1
+                else:
+                    updated += 1
+    return inserted, updated
+
+
+async def mark_stale(source: str, hours: int = 72) -> int:
+    """Flip listings we haven't re-seen recently to status='stale'."""
+    async with connect() as conn:
+        result = await conn.execute(
+            """
+            UPDATE listings
+               SET status = 'stale'
+             WHERE source = $1
+               AND status = 'active'
+               AND last_seen_at < NOW() - ($2::int * INTERVAL '1 hour')
+            """,
+            source,
+            hours,
+        )
+    # asyncpg returns "UPDATE N"
+    return int(result.split()[-1])

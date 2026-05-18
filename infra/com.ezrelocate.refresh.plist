@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  EZrelocate nightly refresh — runs scripts/refresh.sh every night at 01:00 local time.
+
+  Install (one-time):
+      cp infra/com.ezrelocate.refresh.plist ~/Library/LaunchAgents/
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ezrelocate.refresh.plist
+
+  Verify scheduled:
+      launchctl print gui/$(id -u)/com.ezrelocate.refresh | head -20
+
+  Trigger manually (skip the wait):
+      launchctl kickstart gui/$(id -u)/com.ezrelocate.refresh
+
+  Tail logs:
+      tail -f ~/Library/Logs/ezrelocate-refresh.log
+
+  Uninstall:
+      launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.ezrelocate.refresh.plist
+      rm ~/Library/LaunchAgents/com.ezrelocate.refresh.plist
+
+  Important: macOS may be asleep at 1 AM. launchd will fire the job the next
+  time the machine wakes (StartCalendarInterval has built-in "catch up"
+  semantics). If you need *guaranteed* 1 AM wake, set System Settings →
+  Energy → "Wake for network access" or use `pmset repeat wakeorpoweron MTWRFSU 00:55:00`.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ezrelocate.refresh</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-lc</string>
+        <string>/Users/soroosh/EZrelocate/backend/scripts/refresh.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>    <integer>1</integer>
+        <key>Minute</key>  <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/soroosh/Library/Logs/ezrelocate-refresh.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/soroosh/Library/Logs/ezrelocate-refresh.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
