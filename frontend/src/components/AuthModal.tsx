@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { signInWithPassword, signUpWithPassword } from "@/lib/auth";
 
 type Mode = "signin" | "signup";
@@ -18,8 +19,12 @@ export function AuthModal({ open, initialMode = "signup", onClose, onSuccess }: 
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
-  if (!open) return null;
+  // Portal target only exists on the client; defer until after hydration.
+  useEffect(() => setMounted(true), []);
+
+  if (!open || !mounted) return null;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -39,7 +44,7 @@ export function AuthModal({ open, initialMode = "signup", onClose, onSuccess }: 
     }
   }
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
       onClick={onClose}
@@ -115,6 +120,7 @@ export function AuthModal({ open, initialMode = "signup", onClose, onSuccess }: 
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
