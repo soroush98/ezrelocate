@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { supabase } from "./supabase";
+import { requireSupabase, supabase } from "./supabase";
 
 export type MeResponse =
   | { authenticated: false }
@@ -15,7 +15,9 @@ export type MeResponse =
     };
 
 async function authHeader(): Promise<HeadersInit> {
-  const { data } = await supabase().auth.getSession();
+  const c = supabase();
+  if (!c) return {};
+  const { data } = await c.auth.getSession();
   const token = data.session?.access_token;
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
@@ -52,7 +54,9 @@ export function useMe(): { me: MeResponse | null; refresh: () => void; loading: 
 
   useEffect(() => {
     refresh();
-    const { data } = supabase().auth.onAuthStateChange(() => {
+    const c = supabase();
+    if (!c) return;
+    const { data } = c.auth.onAuthStateChange(() => {
       refresh();
     });
     return () => {
@@ -64,17 +68,19 @@ export function useMe(): { me: MeResponse | null; refresh: () => void; loading: 
 }
 
 export async function signInWithPassword(email: string, password: string) {
-  const { error } = await supabase().auth.signInWithPassword({ email, password });
+  const { error } = await requireSupabase().auth.signInWithPassword({ email, password });
   if (error) throw error;
 }
 
 export async function signUpWithPassword(email: string, password: string) {
-  const { error } = await supabase().auth.signUp({ email, password });
+  const { error } = await requireSupabase().auth.signUp({ email, password });
   if (error) throw error;
 }
 
 export async function signOut() {
-  await supabase().auth.signOut();
+  const c = supabase();
+  if (!c) return;
+  await c.auth.signOut();
 }
 
 export async function startCheckout(): Promise<string> {

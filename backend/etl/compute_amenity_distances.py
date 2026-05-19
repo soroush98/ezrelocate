@@ -18,16 +18,20 @@ RADIUS_M = 5000  # match the radius implied by amenity_distances_m semantics
 
 
 SQL_UPDATE = f"""
-WITH nearest AS (
+WITH chunk_listings AS (
+    SELECT id, location
+      FROM listings
+     WHERE status='active' AND location IS NOT NULL
+       AND id = ANY($1::int[])
+),
+nearest AS (
     SELECT
         l.id AS listing_id,
         p.poi_type,
         MIN(ST_Distance(p.location::geography, l.location::geography))::int AS m
-    FROM listings l
+    FROM chunk_listings l
     JOIN pois p
       ON ST_DWithin(p.location::geography, l.location::geography, {RADIUS_M})
-    WHERE l.status = 'active'
-      AND l.location IS NOT NULL
     GROUP BY l.id, p.poi_type
 ),
 rolled AS (
@@ -62,9 +66,21 @@ async def main() -> None:
             "WHERE status='active' AND amenity_distances_m <> '{}'::jsonb"
         )
 
-        rows = await conn.fetch(SQL_UPDATE)
+        # Chunk listings so each spatial-join query stays under Supabase's
+        # pooler statement_timeout. 100 listings/chunk × ~5km radius typically
+        # finishes in 1–3s server-side.
+        all_ids = [r["id"] for r in await conn.fetch(
+            "SELECT id FROM listings WHERE status='active' AND location IS NOT NULL ORDER BY id"
+        )]
+        CHUNK = 100
+        total_updated = 0
+        for i in range(0, len(all_ids), CHUNK):
+            batch = all_ids[i:i + CHUNK]
+            rows = await conn.fetch(SQL_UPDATE, batch)
+            total_updated += len(rows)
+            print(f"  {i + len(batch):4d}/{len(all_ids)}  (+{len(rows)})", flush=True)
 
-    print(f"updated {len(rows)} listings in {time.time() - t0:.1f}s")
+    print(f"updated {total_updated} listings in {time.time() - t0:.1f}s")
 
 
 if __name__ == "__main__":

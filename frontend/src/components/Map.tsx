@@ -3,24 +3,7 @@
 import maplibregl, { type StyleSpecification } from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
 import type { AmenityCategory, Listing, NearbyPOI } from "@/lib/types";
-
-// Distinct color per amenity category — keeps the map legible when several
-// types are overlaid at once. Picked from Tailwind 600/700 ramps.
-const AMENITY_COLOR: Record<AmenityCategory, string> = {
-  subway:     "#dc2626", // red
-  lrt:        "#ea580c", // orange
-  train:      "#991b1b", // dark red
-  bus_stop:   "#ca8a04", // amber
-  grocery:    "#16a34a", // green
-  cafe:       "#92400e", // brown
-  pharmacy:   "#0891b2", // cyan
-  park:       "#65a30d", // lime
-  school:     "#2563eb", // blue
-  university: "#1e40af", // dark blue
-  library:    "#7c3aed", // purple
-  gym:        "#db2777", // pink
-  hospital:   "#be185d", // magenta
-};
+import { AMENITY_COLOR, amenitySvgString } from "@/lib/amenityIcons";
 
 const AMENITY_LABEL: Record<AmenityCategory, string> = {
   subway: "Subway", lrt: "LRT", train: "Train", bus_stop: "Bus",
@@ -184,8 +167,9 @@ export function ListingsMap({
     for (const p of nearbyPois) {
       const el = document.createElement("div");
       el.className = "rl-amenity-pin";
-      el.style.setProperty("--amenity-bg", AMENITY_COLOR[p.poi_type]);
+      el.style.setProperty("--amenity-color", AMENITY_COLOR[p.poi_type]);
       el.title = `${AMENITY_LABEL[p.poi_type]} · ${fmtMeters(p.distance_m)}`;
+      el.innerHTML = amenitySvgString(p.poi_type);
       const marker = new maplibregl.Marker({ element: el, anchor: "center" })
         .setLngLat([p.lng, p.lat])
         .setPopup(
@@ -265,12 +249,16 @@ export function ListingsMap({
               return idx >= 0 ? idx + 1 : "selected";
             })()
           })</div>
-          <div className="flex flex-wrap gap-x-3 gap-y-1">
+          <div className="flex flex-wrap gap-x-3 gap-y-1.5">
             {legendCats.map((c) => (
               <span key={c} className="inline-flex items-center gap-1.5 text-ink-2">
                 <span
-                  className="h-2.5 w-2.5 rounded-full ring-1 ring-white"
-                  style={{ background: AMENITY_COLOR[c] }}
+                  className="grid h-5 w-5 place-items-center rounded-full bg-white"
+                  style={{
+                    color: AMENITY_COLOR[c],
+                    boxShadow: `inset 0 0 0 1.5px ${AMENITY_COLOR[c]}`,
+                  }}
+                  dangerouslySetInnerHTML={{ __html: amenitySvgString(c, 11) }}
                 />
                 {AMENITY_LABEL[c]}
               </span>

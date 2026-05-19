@@ -233,26 +233,40 @@ async def ingest_city(client: httpx.AsyncClient, city: dict, dry_run: bool) -> d
     if dry_run or not rows:
         return {"city": city["city"], "kept": len(rows)}
 
+    # Batched upsert: one round-trip per chunk via unnest. The old per-row
+    # loop was ~200ms × N round-trips, which for big cities (~30k rows) takes
+    # ~90 min/city against a remote DB. Chunked unnest brings it to seconds.
     inserted = updated = 0
+    CHUNK = 2000
     async with connect() as conn:
-        async with conn.transaction():
-            for r in rows:
-                row = await conn.fetchrow(
-                    """
-                    INSERT INTO pois (source, source_id, poi_type, name, location, attrs)
-                    VALUES ($1, $2, $3, $4,
-                            ST_SetSRID(ST_MakePoint($5, $6), 4326),
-                            $7::jsonb)
-                    ON CONFLICT (source, source_id) DO UPDATE SET
-                      poi_type   = EXCLUDED.poi_type,
-                      name       = EXCLUDED.name,
-                      location   = EXCLUDED.location,
-                      attrs      = EXCLUDED.attrs,
-                      updated_at = NOW()
-                    RETURNING (xmax = 0) AS inserted
-                    """,
-                    *r,
-                )
+        for start in range(0, len(rows), CHUNK):
+            batch = rows[start:start + CHUNK]
+            result = await conn.fetch(
+                """
+                INSERT INTO pois (source, source_id, poi_type, name, location, attrs)
+                SELECT source, source_id, poi_type, name,
+                       ST_SetSRID(ST_MakePoint(lng, lat), 4326),
+                       attrs::jsonb
+                FROM unnest($1::text[], $2::text[], $3::text[], $4::text[],
+                            $5::float8[], $6::float8[], $7::text[])
+                  AS t(source, source_id, poi_type, name, lng, lat, attrs)
+                ON CONFLICT (source, source_id) DO UPDATE SET
+                  poi_type   = EXCLUDED.poi_type,
+                  name       = EXCLUDED.name,
+                  location   = EXCLUDED.location,
+                  attrs      = EXCLUDED.attrs,
+                  updated_at = NOW()
+                RETURNING (xmax = 0) AS inserted
+                """,
+                [r[0] for r in batch],
+                [r[1] for r in batch],
+                [r[2] for r in batch],
+                [r[3] for r in batch],
+                [r[4] for r in batch],
+                [r[5] for r in batch],
+                [r[6] for r in batch],
+            )
+            for row in result:
                 if row["inserted"]:
                     inserted += 1
                 else:

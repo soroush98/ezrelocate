@@ -1,6 +1,7 @@
 "use client";
 
 import type { AmenityCategory, Listing } from "@/lib/types";
+import { AMENITY_COLOR, amenitySvgString } from "@/lib/amenityIcons";
 import {
   BathIcon,
   BedIcon,
@@ -153,7 +154,10 @@ export function ListingCard({ listing, rank, selected, onHover, onSelect }: Prop
             <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-ink-2">
               {nearestAmenities(listing.amenity_distances_m, 4).map(([c, m]) => (
                 <span key={c} className="inline-flex items-center gap-1">
-                  <span className="h-1.5 w-1.5 rounded-full bg-brand-500" />
+                  <span
+                    style={{ color: AMENITY_COLOR[c] }}
+                    dangerouslySetInnerHTML={{ __html: amenitySvgString(c, 12) }}
+                  />
                   <span className="text-ink-muted">{AMENITY_LABEL[c]}</span>
                   <span className="font-mono text-ink-2">{fmtDistance(m)}</span>
                 </span>

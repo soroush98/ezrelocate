@@ -1,8 +1,16 @@
-import type { ParsedQuery } from "@/lib/types";
+import type { AmenityCategory, ParsedQuery } from "@/lib/types";
+import { AMENITY_COLOR, amenitySvgString } from "@/lib/amenityIcons";
 import { BedIcon, PawIcon, PinIcon, SparkIcon } from "./Icon";
 import { Pill } from "./Pill";
 
 const fmtMoney = (n: number) => "$" + n.toLocaleString();
+
+const AMENITY_CHIP_LABEL: Record<AmenityCategory, string> = {
+  subway: "subway", lrt: "LRT", train: "train", bus_stop: "bus",
+  grocery: "grocery", cafe: "café", pharmacy: "pharmacy",
+  park: "park", school: "school", university: "university",
+  library: "library", gym: "gym", hospital: "hospital",
+};
 
 export function FilterChips({ parsed }: { parsed: ParsedQuery }) {
   const chips: React.ReactNode[] = [];
@@ -58,6 +66,22 @@ export function FilterChips({ parsed }: { parsed: ParsedQuery }) {
       <Pill key="commute" variant="outline">
         commute → {parsed.commute_target}
         {parsed.commute_max_km != null ? ` (${parsed.commute_max_km}km)` : ""}
+      </Pill>,
+    );
+  }
+  for (const cat of parsed.near_amenities) {
+    chips.push(
+      <Pill
+        key={`am-${cat}`}
+        variant="outline"
+        icon={
+          <span
+            style={{ color: AMENITY_COLOR[cat] }}
+            dangerouslySetInnerHTML={{ __html: amenitySvgString(cat, 12) }}
+          />
+        }
+      >
+        near {AMENITY_CHIP_LABEL[cat]}
       </Pill>,
     );
   }
