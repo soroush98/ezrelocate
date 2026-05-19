@@ -23,8 +23,13 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     # --- Auth (Supabase) -----------------------------------------------------
+    # Supabase project URL (e.g. https://abcd.supabase.co). Used to fetch the
+    # JWKS endpoint for asymmetric-key projects (RS256 / ES256).
+    supabase_url: str = Field(default="", alias="SUPABASE_URL")
+
     # JWT secret from Supabase project settings → API → JWT Settings → JWT Secret.
-    # Used to verify HS256 JWTs issued by Supabase Auth on incoming requests.
+    # Used for legacy HS256 projects. Newer projects use asymmetric keys (RS256/
+    # ES256) and don't need this — the backend fetches the public key via JWKS.
     supabase_jwt_secret: str = Field(default="", alias="SUPABASE_JWT_SECRET")
 
     # --- Stripe --------------------------------------------------------------
