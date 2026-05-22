@@ -12,7 +12,7 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 300
     defaults:
       run:
         working-directory: backend
@@ -40,8 +40,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Kijiji round-robin (100 per city)
-        run: python -u -m etl.scrape_kijiji --per-city 100
+      - name: Kijiji round-robin (500 per city)
+        run: python -u -m etl.scrape_kijiji --per-city 500
 
       - name: OSM POI refresh
         run: python -u -m etl.load_osm_pois
