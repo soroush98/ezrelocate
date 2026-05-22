@@ -237,12 +237,12 @@ export function ListingsMap({
         </div>
       )}
       {listings.length === 0 && !initError && (
-        <div className="pointer-events-none absolute inset-x-0 top-6 mx-auto w-max rounded-full bg-white/85 px-3 py-1 text-xs text-ink-muted shadow-(--shadow-card) backdrop-blur">
+        <div className="pointer-events-none absolute inset-x-0 top-20 mx-auto w-max max-w-[80%] rounded-full bg-white/85 px-3 py-1 text-center text-xs text-ink-muted shadow-(--shadow-card) backdrop-blur md:top-6">
           Search to see rentals on the map
         </div>
       )}
       {legendCats.length > 0 && (
-        <div className="absolute bottom-4 left-4 rounded-lg bg-white/95 px-3 py-2 text-[11px] shadow-(--shadow-pop) backdrop-blur">
+        <div className="absolute bottom-20 left-3 right-3 rounded-lg bg-white/95 px-3 py-2 text-[11px] shadow-(--shadow-pop) backdrop-blur md:bottom-4 md:left-4 md:right-auto">
           <div className="mb-1 font-medium text-ink-muted">Nearby (around #{
             (() => {
               const idx = listings.findIndex((l) => l.id === selectedId);

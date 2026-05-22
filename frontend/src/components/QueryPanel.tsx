@@ -110,9 +110,9 @@ export function QueryPanel({ onResult, selectedId, hoveredId, onHover, onSelect 
   }
 
   return (
-    <aside className="flex h-full w-[500px] shrink-0 flex-col border-r border-line bg-card">
-      {/* Header */}
-      <header className="border-b border-line px-6 pb-5 pt-6">
+    <aside className="flex h-full w-full flex-col border-r border-line bg-card">
+      {/* Header — leave room on the right for the floating account bar. */}
+      <header className="border-b border-line px-4 pb-5 pt-6 pr-32 sm:pr-36 md:px-6 md:pr-6">
         <div className="flex items-center gap-2">
           <span className="grid h-7 w-7 place-items-center rounded-lg bg-ink text-white">
             <FlameIcon size={15} />
@@ -127,7 +127,7 @@ export function QueryPanel({ onResult, selectedId, hoveredId, onHover, onSelect 
       </header>
 
       {/* Search */}
-      <div className="border-b border-line px-6 py-4">
+      <div className="border-b border-line px-4 py-4 md:px-6">
         <div className="relative">
           <SearchIcon
             size={15}
@@ -155,7 +155,7 @@ export function QueryPanel({ onResult, selectedId, hoveredId, onHover, onSelect 
             </>
           )}
         </button>
-        <div className="mt-1 text-right text-[10px] text-ink-muted">⌘↵ to search</div>
+        <div className="mt-1 hidden text-right text-[10px] text-ink-muted md:block">⌘↵ to search</div>
 
         {/* Sample chips */}
         <div className="mt-3 flex flex-wrap gap-1.5">
@@ -172,20 +172,21 @@ export function QueryPanel({ onResult, selectedId, hoveredId, onHover, onSelect 
         </div>
       </div>
 
-      {/* Results */}
-      <div className="flex-1 overflow-y-auto">
+      {/* Results — extra bottom padding on mobile so the floating view toggle
+          doesn't cover the last card. */}
+      <div className="flex-1 overflow-y-auto pb-20 md:pb-0">
         {loading && (
           <LoadingState stage={stage} />
         )}
 
         {error && !loading && (
-          <div className="mx-6 mt-5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+          <div className="mx-4 mt-5 md:mx-6 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
             {error}
           </div>
         )}
 
         {!loading && quotaBlock && (
-          <div className="mx-6 mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <div className="mx-4 mt-5 md:mx-6 rounded-xl border border-amber-200 bg-amber-50 p-4">
             <div className="text-sm font-medium text-amber-900">
               {quotaBlock.kind === "signup_required" && "Free searches used up"}
               {quotaBlock.kind === "subscription_required" && "Subscribe to continue"}
@@ -233,7 +234,7 @@ export function QueryPanel({ onResult, selectedId, hoveredId, onHover, onSelect 
 
 
         {!loading && result && (
-          <div className="px-6 pb-8 pt-5">
+          <div className="px-4 pb-8 pt-5 md:px-6">
             <FilterChips parsed={result.parsed} />
 
             <section className="rl-fade-up mt-4 rounded-xl bg-ink/95 px-4 py-3.5 text-[13px] leading-relaxed text-white shadow-(--shadow-card)">
@@ -276,7 +277,7 @@ export function QueryPanel({ onResult, selectedId, hoveredId, onHover, onSelect 
 
 function LoadingState({ stage }: { stage: number }) {
   return (
-    <div className="px-6 pt-8">
+    <div className="px-4 pt-8 md:px-6 md:pt-8">
       <div className="rl-pulse mb-4 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[11px] text-ink-2">
         <span className="block h-1 w-1 rounded-full bg-brand-600" />
         <span className="block h-1 w-1 rounded-full bg-brand-600" />
@@ -315,7 +316,7 @@ function LoadingState({ stage }: { stage: number }) {
 
 function EmptyState() {
   return (
-    <div className="px-6 pt-10">
+    <div className="px-4 pt-8 md:px-6 md:pt-10">
       <div className="rounded-xl border border-dashed border-line bg-white/60 px-4 py-8 text-center">
         <div className="mx-auto grid h-9 w-9 place-items-center rounded-full bg-brand-50 text-brand-700">
           <SparkIcon size={16} />

@@ -55,6 +55,14 @@ body {
 
 /* MapLibre overrides — softer attribution, hide noisy controls */
 .maplibregl-ctrl-attrib { font-size: 10px; background: rgb(255 255 255 / 0.7) !important; backdrop-filter: blur(6px); }
+/* On mobile the floating account bar occupies the top-right, so move the
+   zoom control out of the way (pinch-to-zoom still works). */
+@media (max-width: 767px) {
+  .maplibregl-ctrl-top-right { display: none; }
+  /* Lift the attribution above the floating List/Map toggle. */
+  .maplibregl-ctrl-bottom-right { bottom: 4.5rem !important; }
+  .maplibregl-ctrl-bottom-left { bottom: 4.5rem !important; }
+}
 .maplibregl-popup-content {
   border-radius: 10px !important;
   padding: 10px 12px !important;
