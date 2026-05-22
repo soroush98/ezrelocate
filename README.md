@@ -195,9 +195,12 @@ own, and you do not need to touch it.
 
 Every night the system wakes up and does four things in order:
 
-1. **Scrape Kijiji.** Walk through 22 Canadian cities and grab the latest 100
-   apartment / house listings from each. New listings are added; listings we
-   have seen before just have their "last seen" timestamp bumped.
+1. **Scrape Kijiji.** Walk through 22 Canadian cities and grab up to 500
+   apartment / house listings from each (round-robin, so coverage stays
+   balanced across the country). New listings are added; listings we have seen
+   before just have their "last seen" timestamp bumped. Small cities exhaust
+   well before 500 and stop early, so the realistic nightly haul is around
+   7,000–8,000 listings.
 2. **Refresh map data.** Pull the latest OpenStreetMap points of interest
    (subway stations, parks, grocery stores, schools, etc.) for the same cities.
 3. **Recompute walking distances.** For every listing, work out how far it is
@@ -211,6 +214,16 @@ Every night the system wakes up and does four things in order:
 Anything that has not been seen on Kijiji for 72 hours is marked `stale` and
 silently drops out of search results.
 
+**How long does it take?** Roughly 3–4 hours end-to-end. The scraper is
+intentionally polite (3 concurrent requests, ~1s jitter between them) so
+Kijiji does not rate-limit us. The workflow has a 5-hour safety timeout.
+
+**What if I want to crawl everything?** Kijiji has 50k+ active listings
+nationally. At polite rates that would take 10–18 hours and risk getting the
+runner's IP blocked, so we crawl a balanced 7k–8k slice each night instead.
+Listings turn over slowly, so within a few nights you have effectively
+nationwide coverage of anything that has been on the market recently.
+
 ### Why the embeddings refresh is easy
 
 Embeddings are the part people usually worry about, because re-embedding a
@@ -221,9 +234,10 @@ whole database is slow and costs money. The trick here is simple:
   vector is `NULL` and the listing is still active.
 - A listing is embedded once and then never again, unless its text changes.
 
-So a typical night embeds a few hundred new listings (cheap, a few cents),
-not the whole 50k+ inventory. The first crawl is the only one that ever pays
-the full embedding cost.
+So a typical night embeds the slice of listings that are genuinely new —
+usually one to two thousand rows out of an active inventory of tens of
+thousands. That costs a handful of cents on Voyage. The first crawl is the
+only one that ever pays the full embedding bill.
 
 ### Where the schedule lives
 
