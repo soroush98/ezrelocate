@@ -48,11 +48,12 @@ results. See [Nightly refresh](#nightly-refresh) below.
 
 ```
 .
+├── .github/workflows/
+│   └── refresh.yml                      # GitHub Actions — nightly refresh job
 ├── infra/
 │   ├── Dockerfile                       # postgres:17-bookworm + postgis + pgvector
 │   ├── docker-compose.yml
-│   ├── init/01-extensions.sql           # CREATE EXTENSION postgis, vector, pg_trgm
-│   └── com.ezrelocate.refresh.plist     # launchd job — nightly 1 AM refresh
+│   └── init/01-extensions.sql           # CREATE EXTENSION postgis, vector, pg_trgm
 ├── db/
 │   └── schema.sql                       # listings, neighborhoods (+ HNSW & GIST indexes)
 ├── backend/
