@@ -77,6 +77,16 @@ export async function signUpWithPassword(email: string, password: string) {
   if (error) throw error;
 }
 
+export async function signInWithGoogle() {
+  const { error } = await requireSupabase().auth.signInWithOAuth({
+    provider: "google",
+    options: {
+      redirectTo: `${window.location.origin}/auth/callback`,
+    },
+  });
+  if (error) throw error;
+}
+
 export async function signOut() {
   const c = supabase();
   if (!c) return;
