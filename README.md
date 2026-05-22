@@ -32,16 +32,17 @@ over a continuously-refreshed national rental index:
 
 **Tried and rejected:**
 - **rentals.ca** — Cloudflare bot challenge (HTTP 403 + JS-required Turnstile).
-  Needs Playwright or a paid proxy; not portfolio-polite.
+  Needs Playwright or a paid proxy.
 - **Realtor.ca / CREA DDF** — Cloudflare-blocked, ToS-prohibited, requires licensed
   brokerage sponsorship.
 - **Facebook Marketplace** — auth wall + heavy anti-bot + ToS. Most FB rentals are
   duplicated to Kijiji anyway.
 
-Scraping is **batch, not per-query.** `backend/scripts/refresh.sh` runs on a
-schedule (nightly at 1 AM via launchd, see below); user queries hit the warm
-pgvector / PostGIS index. Listings not re-seen in 72h auto-flip to
-`status='stale'` and stop appearing in results.
+Scraping is **batch, not per-query.** A scheduled job re-scrapes Kijiji every
+night and writes the results to Postgres. User queries hit the warm
+pgvector / PostGIS index, so the chat side never waits on the network. Listings
+not re-seen in 72 hours auto-flip to `status='stale'` and stop appearing in
+results. See [Nightly refresh](#nightly-refresh) below.
 
 ## Repository layout
 
@@ -138,37 +139,11 @@ npm run dev
 # http://localhost:3000
 ```
 
-### 6. Schedule the nightly 1 AM refresh
+### 6. Schedule the nightly refresh
 
-**Option A — launchd (recommended on macOS):**
-
-```bash
-cp infra/com.ezrelocate.refresh.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ezrelocate.refresh.plist
-
-# Verify it's scheduled:
-launchctl print gui/$(id -u)/com.ezrelocate.refresh | head -20
-
-# Trigger one run right now (skip the wait):
-launchctl kickstart gui/$(id -u)/com.ezrelocate.refresh
-
-# Tail logs:
-tail -f ~/Library/Logs/ezrelocate-refresh.log
-
-# Uninstall:
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.ezrelocate.refresh.plist
-rm ~/Library/LaunchAgents/com.ezrelocate.refresh.plist
-```
-
-**Option B — crontab (Linux servers or macOS):**
-
-```bash
-( crontab -l 2>/dev/null; echo "0 1 * * * /Users/soroosh/EZrelocate/backend/scripts/refresh.sh >> $HOME/Library/Logs/ezrelocate-refresh.log 2>&1" ) | crontab -
-```
-
-**macOS sleep caveat:** if the laptop is asleep at 1 AM, launchd will fire the
-job the next time the machine wakes. For guaranteed wake-up: `sudo pmset repeat
-wakeorpoweron MTWRFSU 00:55:00`.
+See the [Nightly refresh](#nightly-refresh) section below for the full
+explanation. In short: GitHub Actions runs the pipeline every night for free;
+you only need to add a few secrets to the repo.
 
 ## API
 
@@ -210,21 +185,79 @@ Response:
 }
 ```
 
-## A note on scraping ethics & ToS
+## Nightly refresh
 
-Kijiji's ToS restricts scraping. For a portfolio project crawling at polite rates
-(3 concurrent requests, ~1s jitter, ~250 listings per city per refresh) this is
-the standard gray area many tools occupy. Don't redistribute the data and don't
-run this at commercial scale without negotiated access. If you ever deploy a
-public demo, expect to need a residential-proxy provider (BrightData, Apify) to
-avoid IP-level rate limits.
+This is the part that keeps the listings fresh. It runs once a night, on its
+own, and you do not need to touch it.
 
-## Resume framing
+### What it does, in plain English
 
-> Built EZrelocate — a Canada-wide rental search system with hybrid retrieval
-> combining PostGIS spatial queries, pgvector semantic search, and Claude for
-> query parsing and explanation generation. A polite per-city round-robin Kijiji
-> scraper feeds a pgvector-indexed Postgres warm store on a nightly launchd
-> schedule. User queries hit a SQL hard-filter, then vector rerank on a 60/40
-> blend of neighbourhood-fit and listing-fit, then optional PostGIS commute
-> filtering, then Claude generates the final answer citing specific listings.
+Every night the system wakes up and does four things in order:
+
+1. **Scrape Kijiji.** Walk through 22 Canadian cities and grab the latest 100
+   apartment / house listings from each. New listings are added; listings we
+   have seen before just have their "last seen" timestamp bumped.
+2. **Refresh map data.** Pull the latest OpenStreetMap points of interest
+   (subway stations, parks, grocery stores, schools, etc.) for the same cities.
+3. **Recompute walking distances.** For every listing, work out how far it is
+   to the nearest subway, park, school, and so on. These numbers are stored
+   right on the listing row, so the search side never has to compute them
+   live.
+4. **Embed only the new listings.** Send the brand-new listings to Voyage AI to
+   turn their text into vectors. Old listings keep the vectors they already
+   have, so this step is fast and cheap.
+
+Anything that has not been seen on Kijiji for 72 hours is marked `stale` and
+silently drops out of search results.
+
+### Why the embeddings refresh is easy
+
+Embeddings are the part people usually worry about, because re-embedding a
+whole database is slow and costs money. The trick here is simple:
+
+- Each listing row has a vector column that starts out `NULL`.
+- The embed step (`backend/etl/embed_all.py`) only looks at rows where the
+  vector is `NULL` and the listing is still active.
+- A listing is embedded once and then never again, unless its text changes.
+
+So a typical night embeds a few hundred new listings (cheap, a few cents),
+not the whole 50k+ inventory. The first crawl is the only one that ever pays
+the full embedding cost.
+
+### Where the schedule lives
+
+The schedule lives in [.github/workflows/refresh.yml](.github/workflows/refresh.yml).
+It runs on GitHub's free Actions runners every night at 09:00 UTC (around 4
+or 5 AM Eastern). You can also start a run by hand from the repo's **Actions**
+tab → **Nightly refresh** → **Run workflow**.
+
+To make it work after forking the repo, add these three secrets at
+**Settings → Secrets and variables → Actions**:
+
+| Secret | Where to get it |
+|---|---|
+| `DATABASE_URL` | Your Postgres connection string (Supabase, Neon, RDS, etc.) |
+| `ANTHROPIC_API_KEY` | console.anthropic.com |
+| `VOYAGE_API_KEY` | voyageai.com |
+
+That's it. GitHub will run the job on schedule and you can watch the logs
+right in the Actions tab.
+
+### Running the refresh locally (optional)
+
+If you would rather run it on your own machine, the same pipeline lives in
+[backend/scripts/refresh.sh](backend/scripts/refresh.sh). Trigger it from cron,
+launchd, or by hand:
+
+```bash
+./backend/scripts/refresh.sh
+```
+
+## A note on scraping
+
+Kijiji's ToS restricts scraping. The crawler here is intentionally polite —
+3 concurrent requests, around 1 second of jitter between them, capped at a few
+hundred listings per city per refresh. Please don't redistribute the data and
+don't run this at commercial scale without negotiated access. If you ever
+deploy a busy public instance, expect to need a residential-proxy provider
+(BrightData, Apify) to avoid IP-level rate limits.
