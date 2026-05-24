@@ -5,13 +5,9 @@ the system returns real rental listings on a map, with reasoning that cites each
 pick by id.
 
 The interesting part isn't the chat — it's the hybrid retrieval pipeline running
-over a continuously-refreshed national rental index:
+over a continuously-refreshed national rental index.
 
-> **Kijiji scraper (national, per-city round-robin) → Postgres + PostGIS + pgvector
-> → SQL hard-filter on rent/beds/pets/utilities → pgvector cosine rerank on a 60/40
-> blend of neighbourhood-profile-fit and listing-description-fit → optional PostGIS
-> commute filter → Claude generates the final recommendation citing specific
-> listing ids.**
+![EZrelocate architecture](architecture.png)
 
 ## Stack
 
