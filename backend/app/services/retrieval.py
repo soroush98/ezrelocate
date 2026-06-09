@@ -119,8 +119,9 @@ def _build_candidate_sql(
         add("(l.available_from IS NULL OR l.available_from <= {p})", parsed.available_by)
 
     # Amenity proximity (OSM-backed). Each requested amenity must be within
-    # parsed.amenity_max_m metres of the listing.
-    max_m = int(parsed.amenity_max_m or 800)
+    # parsed.amenity_max_m metres of the listing. Capped at 5km so a confused
+    # LLM widening the filter to "anywhere in the city" can't silently drop it.
+    max_m = max(50, min(int(parsed.amenity_max_m or 800), 5000))
     for amenity in parsed.near_amenities:
         if amenity not in _ALLOWED_AMENITIES:
             continue
@@ -189,7 +190,7 @@ def _build_candidate_sql(
         FROM listings l
         LEFT JOIN neighborhoods n ON l.neighborhood_id = n.id
         WHERE {' AND '.join(where)}
-        ORDER BY score DESC NULLS LAST
+        ORDER BY score DESC NULLS LAST, l.last_seen_at DESC, l.id
         LIMIT {TOP_K}
     """
     return sql, args
@@ -208,17 +209,34 @@ async def _geocode_commute_target(
     """
     async with acquire() as conn:
         # 1) POI name match — restrict to a city when supplied so 'Stanley Park'
-        # in Vancouver isn't matched to a Stanley Park elsewhere.
+        # in Vancouver isn't matched to a Stanley Park elsewhere. OSM POIs don't
+        # carry city tags reliably, so we bound via the centroid of that city's
+        # active listings and a 60km radius (covers metro areas like GTA).
         poi_row = await conn.fetchrow(
             """
-            SELECT ST_AsText(location) AS wkt, name, poi_type
-            FROM pois
-            WHERE name IS NOT NULL
-              AND name % $1   -- pg_trgm similarity above default 0.3 threshold
-            ORDER BY similarity(name, $1) DESC, length(name) ASC
+            WITH city_pt AS (
+                SELECT ST_Centroid(ST_Collect(location))::geography AS pt
+                FROM listings
+                WHERE location IS NOT NULL
+                  AND status = 'active'
+                  AND ($2::text IS NULL OR LOWER(city) = LOWER($2))
+                  AND ($3::text IS NULL OR province = UPPER($3))
+            )
+            SELECT ST_AsText(p.location) AS wkt, p.name, p.poi_type
+            FROM pois p
+            WHERE p.name IS NOT NULL
+              AND p.name % $1   -- pg_trgm similarity above default 0.3 threshold
+              AND (
+                $2::text IS NULL
+                OR (SELECT pt FROM city_pt) IS NULL
+                OR ST_DWithin(p.location::geography, (SELECT pt FROM city_pt), 60000)
+              )
+            ORDER BY similarity(p.name, $1) DESC, length(p.name) ASC
             LIMIT 1
             """,
             target,
+            city,
+            province,
         )
         if poi_row:
             return poi_row["wkt"]
