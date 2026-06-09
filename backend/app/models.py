@@ -59,7 +59,6 @@ class ListingOut(BaseModel):
     address: str | None
     city: str
     province: str
-    neighborhood: str | None
     lat: float | None
     lng: float | None
 

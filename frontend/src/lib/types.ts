@@ -32,7 +32,6 @@ export type Listing = {
   address: string | null;
   city: string;
   province: string;
-  neighborhood: string | null;
   lat: number | null;
   lng: number | null;
   monthly_rent: number | null;

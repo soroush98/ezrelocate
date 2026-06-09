@@ -12,38 +12,12 @@
 
 DROP TABLE IF EXISTS pois;
 DROP TABLE IF EXISTS listings;
-DROP TABLE IF EXISTS neighborhoods;
 DROP TYPE  IF EXISTS listing_status;
 
 -- ---------------------------------------------------------------------------
 -- Embedding dimension: Voyage AI voyage-3-large outputs 1024 dims.
 -- If you swap providers update both these column types and embeddings.py.
 -- ---------------------------------------------------------------------------
-
--- ---------------------------------------------------------------------------
--- Neighbourhoods — optional per city. Listings without a neighbourhood still
--- work; hybrid retrieval falls back to listing-only scoring.
--- ---------------------------------------------------------------------------
-CREATE TABLE neighborhoods (
-    id              SERIAL PRIMARY KEY,
-    name            TEXT NOT NULL,
-    city            TEXT NOT NULL,
-    province        CHAR(2) NOT NULL,
-    boundary        GEOMETRY(MultiPolygon, 4326),
-    centroid        GEOMETRY(Point, 4326),
-    walk_score      INT,
-    transit_score   INT,
-    profile_text    TEXT,
-    profile_embed   VECTOR(1024),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (province, city, name)
-);
-
-CREATE INDEX neighborhoods_boundary_gix    ON neighborhoods USING GIST (boundary);
-CREATE INDEX neighborhoods_centroid_gix    ON neighborhoods USING GIST (centroid);
-CREATE INDEX neighborhoods_profile_hnsw    ON neighborhoods USING hnsw (profile_embed vector_cosine_ops);
-CREATE INDEX neighborhoods_name_trgm       ON neighborhoods USING GIN (name gin_trgm_ops);
-CREATE INDEX neighborhoods_city_idx        ON neighborhoods (province, city);
 
 -- ---------------------------------------------------------------------------
 -- Listings — rentals from Kijiji, rentals.ca, ...
@@ -61,7 +35,6 @@ CREATE TABLE listings (
     province              CHAR(2) NOT NULL,
     postal_code           TEXT,
     location              GEOMETRY(Point, 4326),          -- nullable: some sources omit coords
-    neighborhood_id       INT REFERENCES neighborhoods(id) ON DELETE SET NULL,
 
     -- Rental specifics
     monthly_rent          INT,                            -- CAD/month
@@ -92,7 +65,6 @@ CREATE TABLE listings (
 
 CREATE INDEX listings_location_gix   ON listings USING GIST (location);
 CREATE INDEX listings_filter_idx     ON listings (status, province, city, monthly_rent, bedrooms);
-CREATE INDEX listings_neighborhood   ON listings (neighborhood_id);
 CREATE INDEX listings_desc_hnsw      ON listings USING hnsw (desc_embed vector_cosine_ops);
 CREATE INDEX listings_last_seen      ON listings (last_seen_at);
 CREATE INDEX listings_amenities_gin  ON listings USING GIN (amenity_distances_m jsonb_path_ops);

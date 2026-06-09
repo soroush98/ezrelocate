@@ -3,7 +3,7 @@
 Pipeline:
   1. SQL hard-filter: status, city/province, rent, beds, baths, pets, furnished,
      utilities, lease, availability, and `near_amenities` proximity (OSM-backed).
-  2. pgvector cosine rerank — 60/40 neighbourhood / listing description.
+  2. pgvector cosine rerank on the listing description embedding.
   3. Optional PostGIS commute filter.
 """
 
@@ -22,8 +22,6 @@ def _as_dict(v) -> dict:
         return v
     return json.loads(v)
 
-NEIGHBOURHOOD_WEIGHT = 0.6
-LISTING_WEIGHT = 0.4
 TOP_K = 5
 
 # Whitelist for amenity filter clauses — prevents SQL injection via Claude.
@@ -55,7 +53,6 @@ async def retrieve(parsed: ParsedQuery) -> list[ListingOut]:
             address=row["address"],
             city=row["city"],
             province=row["province"],
-            neighborhood=row["neighborhood_name"],
             lat=row["lat"],
             lng=row["lng"],
             monthly_rent=row["monthly_rent"],
@@ -131,23 +128,13 @@ def _build_candidate_sql(
             f"AND (l.amenity_distances_m->>'{amenity}')::int <= {max_m})"
         )
 
-    # Hybrid score. pgvector cosine *distance* is in [0, 2]; similarity = 1 - distance.
-    # No neighbourhood embed loaded yet (Edmonton loader removed) — fall through
-    # to listing-only scoring.
+    # Lifestyle rerank. pgvector cosine *distance* is in [0, 2]; similarity =
+    # 1 - distance, against the listing's own description embedding.
     if intent_embed is not None:
         embed_str = "[" + ",".join(f"{x:.6f}" for x in intent_embed) + "]"
         args.append(embed_str)
-        nb_p = f"${len(args)}"
-        args.append(embed_str)
         listing_p = f"${len(args)}"
-        score_expr = f"""
-            CASE WHEN n.profile_embed IS NOT NULL THEN
-              {NEIGHBOURHOOD_WEIGHT} * (1 - (n.profile_embed <=> {nb_p}::vector))
-              + {LISTING_WEIGHT} * (1 - (l.desc_embed <=> {listing_p}::vector))
-            ELSE
-              (1 - (l.desc_embed <=> {listing_p}::vector))
-            END
-        """
+        score_expr = f"(1 - (l.desc_embed <=> {listing_p}::vector))"
     else:
         score_expr = "0.0"
 
@@ -185,10 +172,8 @@ def _build_candidate_sql(
             l.description,
             CASE WHEN l.location IS NULL THEN NULL ELSE ST_Y(l.location) END AS lat,
             CASE WHEN l.location IS NULL THEN NULL ELSE ST_X(l.location) END AS lng,
-            n.name AS neighborhood_name,
             ({score_expr}) AS score
         FROM listings l
-        LEFT JOIN neighborhoods n ON l.neighborhood_id = n.id
         WHERE {' AND '.join(where)}
         ORDER BY score DESC NULLS LAST, l.last_seen_at DESC, l.id
         LIMIT {TOP_K}
@@ -201,11 +186,10 @@ async def _geocode_commute_target(
 ) -> str | None:
     """Resolve a named place to a WKT POINT.
 
-    Search order:
-      1. POIs by name — covers specific universities, transit stations, parks,
-         airports, malls, anything we ingested from OSM with a `name` tag.
-      2. Neighbourhood centroids — covers "downtown Toronto", "Plateau", etc.
-    Ranked by pg_trgm similarity so 'McGill' matches 'McGill University'.
+    Matches against POIs by name — covers specific universities, transit
+    stations, parks, airports, malls, anything we ingested from OSM with a
+    `name` tag. Ranked by pg_trgm similarity so 'McGill' matches
+    'McGill University'.
     """
     async with acquire() as conn:
         # 1) POI name match — restrict to a city when supplied so 'Stanley Park'
@@ -238,22 +222,4 @@ async def _geocode_commute_target(
             city,
             province,
         )
-        if poi_row:
-            return poi_row["wkt"]
-
-        # 2) Fallback: neighbourhood centroid
-        nb_row = await conn.fetchrow(
-            """
-            SELECT ST_AsText(centroid) AS wkt
-            FROM neighborhoods
-            WHERE ($2::text IS NULL OR LOWER(city) = LOWER($2))
-              AND ($3::text IS NULL OR province = UPPER($3))
-              AND name ILIKE '%' || $1 || '%'
-            ORDER BY name <-> $1
-            LIMIT 1
-            """,
-            target,
-            city,
-            province,
-        )
-    return nb_row["wkt"] if nb_row else None
+    return poi_row["wkt"] if poi_row else None

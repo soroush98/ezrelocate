@@ -1,7 +1,7 @@
-"""Backfill embeddings for listings.desc_embed and neighborhoods.profile_embed.
+"""Backfill embeddings for listings.desc_embed.
 
-Re-run any time you add listings or rewrite profiles. Idempotent — only embeds
-rows whose embedding column is NULL or whose text has changed.
+Re-run any time you add listings. Idempotent — only embeds rows whose embedding
+column is still NULL.
 
 Run:
     cd backend && python -m etl.embed_all
@@ -51,8 +51,7 @@ async def main() -> None:
         n_listings = await _embed_table(
             conn, "listings", "description", "desc_embed", "AND status = 'active'"
         )
-        n_neigh = await _embed_table(conn, "neighborhoods", "profile_text", "profile_embed")
-    print(f"embedded {n_listings} listings, {n_neigh} neighbourhoods ✓")
+    print(f"embedded {n_listings} listings ✓")
 
 
 if __name__ == "__main__":

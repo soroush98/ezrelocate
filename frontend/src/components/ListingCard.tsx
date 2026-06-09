@@ -93,11 +93,7 @@ export function ListingCard({ listing, rank, selected, onHover, onSelect }: Prop
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="truncate text-[13px] font-semibold text-ink">
-                {listing.neighborhood ?? listing.city}
-                <span className="font-normal text-ink-muted">
-                  {" · "}
-                  {listing.city}, {listing.province}
-                </span>
+                {listing.city}, {listing.province}
               </div>
               <div className="mt-0.5 truncate text-xs text-ink-muted">
                 {listing.title ?? listing.address ?? "—"}
