@@ -25,7 +25,6 @@ import argparse
 import asyncio
 import json
 import re
-from urllib.parse import urljoin
 
 import httpx
 from selectolax.parser import HTMLParser
@@ -84,10 +83,6 @@ def _city_page_url(path: str, page: int) -> str:
     base, _, cat = path.rpartition("/")
     return f"{BASE}{base}/page-{page}/{cat}"
 
-LISTING_LINK_SELECTOR = "a[data-testid='listing-link']"
-# Fallback selectors that Kijiji has used in recent layouts.
-LISTING_LINK_FALLBACKS = ("a.title", "a[href*='/v-apartments-condos/']")
-
 PROPERTY_TYPE_NORMAL = {
     "apartment": "apartment",
     "condo": "condo",
@@ -103,32 +98,6 @@ def _kijiji_id_from_url(url: str) -> str | None:
     # Kijiji URLs end with /<numeric-id>
     m = re.search(r"/(\d{8,})\b", url)
     return m.group(1) if m else None
-
-
-def _extract_listing_urls(html: str) -> list[str]:
-    tree = HTMLParser(html)
-    urls: list[str] = []
-    nodes = tree.css(LISTING_LINK_SELECTOR)
-    if not nodes:
-        for sel in LISTING_LINK_FALLBACKS:
-            nodes = tree.css(sel)
-            if nodes:
-                break
-    for n in nodes:
-        href = n.attributes.get("href") or ""
-        if not href:
-            continue
-        if "/v-" not in href:
-            continue
-        urls.append(urljoin(BASE, href))
-    # dedupe but keep order
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for u in urls:
-        if u not in seen:
-            seen.add(u)
-            deduped.append(u)
-    return deduped
 
 
 def _parse_listing(url: str, html: str) -> ScrapedListing | None:
@@ -164,7 +133,7 @@ def _extract_next_data(tree: HTMLParser) -> dict | None:
 
 
 def _from_next_data(url: str, source_id: str, data: dict) -> ScrapedListing | None:
-    """Parse Kijiji's __NEXT_DATA__ blob.
+    """Parse Kijiji's __NEXT_DATA__ blob from a single listing detail page.
 
     Real-estate listings live in Apollo's normalized cache at:
         data.props.pageProps.__APOLLO_STATE__["RealEstateListing:<id>"]
@@ -177,6 +146,44 @@ def _from_next_data(url: str, source_id: str, data: dict) -> ScrapedListing | No
         None,
     )
     if not listing:
+        return None
+    return _listing_from_apollo(listing, url)
+
+
+def _listings_from_search(html: str) -> list[ScrapedListing]:
+    """Every listing embedded in a search-results page's __NEXT_DATA__.
+
+    Kijiji's search page carries the full RealEstateListing objects for all ~40
+    cards in its Apollo cache, so we parse them directly from the one search
+    request — no per-listing detail fetch. Those detail fetches (≈37 extra
+    requests per page) were exactly what tripped Kijiji's 429 rate limiter.
+    """
+    tree = HTMLParser(html)
+    data = _extract_next_data(tree)
+    if not data:
+        return []
+    state = data.get("props", {}).get("pageProps", {}).get("__APOLLO_STATE__", {})
+    out: list[ScrapedListing] = []
+    for key, obj in state.items():
+        if key.startswith("RealEstateListing:"):
+            listing = _listing_from_apollo(obj)
+            if listing:
+                out.append(listing)
+    return out
+
+
+def _listing_from_apollo(
+    listing: dict, url: str | None = None
+) -> ScrapedListing | None:
+    """Build a ScrapedListing from one Apollo `RealEstateListing` object.
+
+    The same object shape appears on a detail page (one per page) and embedded
+    in a search-results page (~40 per page), so this single parser serves both.
+    """
+    url = url or listing.get("url") or ""
+    lid = listing.get("id")
+    source_id = str(lid) if lid not in (None, "") else _kijiji_id_from_url(url)
+    if not source_id:
         return None
 
     loc = listing.get("location") or {}
@@ -410,19 +417,18 @@ async def _crawl(
             print(f"  [{label}] page {page} fetch failed ({e!r})")
             break
 
-        urls = _extract_listing_urls(r.text)
-        if not urls:
+        # Parse every listing straight out of the search page's embedded data —
+        # one request per page, no per-listing detail fetches. This is what keeps
+        # us under Kijiji's 429 rate limit (and it's ~40× fewer requests).
+        listings = _listings_from_search(r.text)
+        if not listings:
             break
 
-        remaining = max_count - collected
-        tasks = [client.get(u) for u in urls[:remaining]]
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
         added = 0
-        for u, resp in zip(urls, responses, strict=False):
-            if isinstance(resp, BaseException):
-                continue
-            parsed = _parse_listing(u, resp.text)
-            if parsed and parsed.monthly_rent and parsed.city:
+        for parsed in listings:
+            if collected >= max_count:
+                break
+            if parsed.monthly_rent and parsed.city:
                 batch.append(parsed)
                 added += 1
                 collected += 1
@@ -460,11 +466,11 @@ async def scrape(
               f"(running: {totals['inserted']} new / {totals['updated']} refreshed)")
         b.clear()
 
-    # Kijiji rate-limits aggressively (HTTP 429, no Retry-After) — roughly every
-    # other rapid request gets throttled. Serialise requests and use a wider
-    # jitter so we stay under the limiter instead of bursting past page 1.
+    # Now that listings come straight from the search page's embedded data, a
+    # whole city is just ~13 page requests instead of ~500 detail fetches — so
+    # the old 429 storm is gone and a modest delay keeps us well under the limit.
     async with PoliteClient(
-        max_concurrency=1, min_delay_ms=1200, max_delay_ms=3000
+        max_concurrency=2, min_delay_ms=400, max_delay_ms=1000
     ) as client:
         if per_city is not None:
             print(f"=== per-city round-robin: {per_city}/city × {len(CITIES)} cities ===\n")
