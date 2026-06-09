@@ -18,6 +18,7 @@ Run:
 import argparse
 import asyncio
 import json
+import math
 import sys
 from collections import Counter
 from typing import Any
@@ -35,12 +36,17 @@ OVERPASS_ENDPOINTS = [
 # Bounded retry budget. We rotate through the mirrors (one per attempt) so a
 # single slow/throttled endpoint can't monopolise the budget the way the old
 # "recurse through all mirrors inside every tenacity attempt" design did — that
-# let one city spin for over an hour. Worst case now: ~MAX_ATTEMPTS requests
-# capped at (TIMEOUT_SECONDS+10)s each, plus bounded backoff.
-MAX_ATTEMPTS = 6
-BACKOFF_BASE = 5     # seconds; doubles each attempt
-BACKOFF_CAP = 60
+# let one city spin for over an hour. Worst case per request now:
+# ~MAX_ATTEMPTS × (TIMEOUT_SECONDS+10)s, plus bounded backoff.
+MAX_ATTEMPTS = 4
+BACKOFF_BASE = 4     # seconds; doubles each attempt
+BACKOFF_CAP = 30
 RETRYABLE_STATUS = {429, 502, 503, 504}
+
+# Critical metros. If any of these fail entirely we fail the whole run, even if
+# we're under the aggregate degraded-threshold — stale POIs in Toronto matter
+# far more than in a small town. Matched as a case-insensitive substring.
+CRITICAL_CITY_KEYWORDS = ("toronto", "montreal", "vancouver", "calgary", "ottawa")
 
 # (poi_type, list-of-Overpass-filter-stanzas).
 # Each stanza is appended to node/way/relation queries inside the bounding box.
@@ -80,7 +86,13 @@ CATEGORIES: list[tuple[str, list[str]]] = [
 _CATEGORY_PRIORITY = [t for t, _ in CATEGORIES]
 
 BBOX_BUFFER_DEG = 0.05  # ≈ 5.5km — generous around each city's listing footprint
-TIMEOUT_SECONDS = 90    # Overpass needs room for big bboxes
+TIMEOUT_SECONDS = 60    # per-tile query budget; tiles are small so this is plenty
+
+# Max degrees per side for a single Overpass query. A whole-metro bbox × all 13
+# categories × node/way/relation is too heavy for the free Overpass servers —
+# they return 504 (gateway timeout) before finishing. Splitting each city into
+# a grid of tiles this size keeps every query light enough to complete.
+TILE_MAX_SPAN_DEG = 0.18  # ≈ 20km/side
 
 
 async def fetch_city_bboxes(only_city: str | None) -> list[dict]:
@@ -109,6 +121,29 @@ async def fetch_city_bboxes(only_city: str | None) -> list[dict]:
     if only_city:
         cities = [c for c in cities if only_city.lower() in c["city"].lower()]
     return cities
+
+
+def split_bbox(
+    bbox: tuple[float, float, float, float],
+) -> list[tuple[float, float, float, float]]:
+    """Split a bbox into a grid of tiles no larger than TILE_MAX_SPAN_DEG/side.
+
+    A small city stays one tile; a big metro becomes a 2×2 or 3×3 grid so each
+    Overpass query covers a manageable area and doesn't time out server-side.
+    """
+    south, west, north, east = bbox
+    n_lat = max(1, math.ceil((north - south) / TILE_MAX_SPAN_DEG))
+    n_lng = max(1, math.ceil((east - west) / TILE_MAX_SPAN_DEG))
+    tiles = []
+    for i in range(n_lat):
+        for j in range(n_lng):
+            tiles.append((
+                south + (north - south) * i / n_lat,
+                west + (east - west) * j / n_lng,
+                south + (north - south) * (i + 1) / n_lat,
+                west + (east - west) * (j + 1) / n_lng,
+            ))
+    return tiles
 
 
 def build_overpass_query(bbox: tuple[float, float, float, float]) -> str:
@@ -223,11 +258,36 @@ def element_latlng(el: dict) -> tuple[float, float] | None:
 
 async def ingest_city(client: httpx.AsyncClient, city: dict, dry_run: bool) -> dict:
     bbox = (city["south"], city["west"], city["north"], city["east"])
+    tiles = split_bbox(bbox)
     print(f"\n--- {city['city']}, {city['province']}  "
-          f"(bbox {bbox[0]:.3f},{bbox[1]:.3f},{bbox[2]:.3f},{bbox[3]:.3f}) ---")
+          f"(bbox {bbox[0]:.3f},{bbox[1]:.3f},{bbox[2]:.3f},{bbox[3]:.3f}) "
+          f"· {len(tiles)} tile(s) ---")
 
-    query = build_overpass_query(bbox)
-    elements = await overpass_query(client, query)
+    # Query each tile separately and merge, deduping elements that straddle a
+    # tile boundary. A tile that fails after all retries is skipped (partial
+    # data beats none) but counted, so the city is only "failed" if *every*
+    # tile failed.
+    elements: list[dict] = []
+    seen: set[tuple] = set()
+    tiles_failed = 0
+    for tbbox in tiles:
+        try:
+            els = await overpass_query(client, build_overpass_query(tbbox))
+        except Exception as e:
+            tiles_failed += 1
+            print(f"  tile ({tbbox[0]:.2f},{tbbox[1]:.2f}) failed: "
+                  f"{type(e).__name__}: {e}")
+            continue
+        for el in els:
+            key = (el.get("type"), el.get("id"))
+            if key not in seen:
+                seen.add(key)
+                elements.append(el)
+
+    if tiles_failed == len(tiles):
+        # Nothing came back from any tile — surface it as a hard failure so the
+        # caller records the city as failed (not a silent empty success).
+        raise RuntimeError(f"all {len(tiles)} tile(s) failed")
 
     rows: list[tuple] = []
     type_counts: Counter[str] = Counter()
@@ -255,10 +315,12 @@ async def ingest_city(client: httpx.AsyncClient, city: dict, dry_run: bool) -> d
         ))
         type_counts[poi_type] += 1
 
-    if not elements:
-        # 0 elements for a real city almost always means we gave up against a
-        # throttled mirror, not that the city is empty. Flag it loudly so it
-        # doesn't hide behind a green run.
+    if tiles_failed:
+        # Some tiles dropped out — the city's POIs are incomplete. Flag it so a
+        # partially-throttled metro doesn't masquerade as fully refreshed.
+        print(f"  !! WARNING: {city['city']} {tiles_failed}/{len(tiles)} tiles "
+              f"failed — POI coverage is partial")
+    elif not elements:
         print(f"  !! WARNING: {city['city']} returned 0 OSM elements "
               f"(likely throttled/empty response)")
     print(f"  fetched {len(elements)} OSM elements · classified {len(rows)} · "
@@ -268,7 +330,8 @@ async def ingest_city(client: httpx.AsyncClient, city: dict, dry_run: bool) -> d
             print(f"    {t:11s} {type_counts[t]:>6d}")
 
     if dry_run or not rows:
-        return {"city": city["city"], "kept": len(rows), "fetched": len(elements)}
+        return {"city": city["city"], "kept": len(rows), "fetched": len(elements),
+                "tiles_failed": tiles_failed}
 
     # Batched upsert: one round-trip per chunk via unnest. The old per-row
     # loop was ~200ms × N round-trips, which for big cities (~30k rows) takes
@@ -310,7 +373,7 @@ async def ingest_city(client: httpx.AsyncClient, city: dict, dry_run: bool) -> d
                     updated += 1
     print(f"  upsert: +{inserted} new · {updated} refreshed")
     return {"city": city["city"], "kept": len(rows), "fetched": len(elements),
-            "inserted": inserted, "updated": updated}
+            "tiles_failed": tiles_failed, "inserted": inserted, "updated": updated}
 
 
 async def main(only_city: str | None, dry_run: bool) -> None:
@@ -346,15 +409,27 @@ async def main(only_city: str | None, dry_run: bool) -> None:
 
     total_kept = sum(r.get("kept", 0) for r in results)
     empty = [r["city"] for r in results if r.get("fetched", 0) == 0]
+    partial = [r["city"] for r in results if r.get("tiles_failed", 0)]
     print(f"\n=== done · {total_kept} POIs across {len(results)} cities ===")
 
-    # Don't let a throttled Overpass hide behind a green checkmark. If more than
-    # a quarter of cities errored out or came back empty, fail the run so the
-    # scheduled workflow surfaces it instead of silently shipping stale data.
+    def _is_critical(name: str) -> bool:
+        return any(k in name.lower() for k in CRITICAL_CITY_KEYWORDS)
+
+    # Don't let a throttled Overpass hide behind a green checkmark.
     degraded = failed + empty
-    if degraded:
-        print(f"  !! {len(failed)} failed, {len(empty)} empty: "
-              f"{', '.join(degraded)}", file=sys.stderr)
+    if degraded or partial:
+        print(f"  !! {len(failed)} failed, {len(empty)} empty, "
+              f"{len(partial)} partial: "
+              f"failed={failed} empty={empty} partial={partial}", file=sys.stderr)
+
+    # Fail the run if (a) a critical metro failed/empty entirely, or (b) more
+    # than a quarter of all cities errored out — either way the data shipped is
+    # too degraded to pass silently.
+    critical_down = [c for c in degraded if _is_critical(c)]
+    if critical_down:
+        print(f"!! OSM ingest: critical metro(s) failed: {critical_down} "
+              f"— failing the run", file=sys.stderr)
+        sys.exit(1)
     if len(degraded) > len(cities) // 4:
         print(f"!! OSM ingest degraded: {len(degraded)}/{len(cities)} cities "
               f"failed or empty — failing the run", file=sys.stderr)

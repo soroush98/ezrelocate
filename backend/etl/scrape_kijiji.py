@@ -460,7 +460,12 @@ async def scrape(
               f"(running: {totals['inserted']} new / {totals['updated']} refreshed)")
         b.clear()
 
-    async with PoliteClient() as client:
+    # Kijiji rate-limits aggressively (HTTP 429, no Retry-After) — roughly every
+    # other rapid request gets throttled. Serialise requests and use a wider
+    # jitter so we stay under the limiter instead of bursting past page 1.
+    async with PoliteClient(
+        max_concurrency=1, min_delay_ms=1200, max_delay_ms=3000
+    ) as client:
         if per_city is not None:
             print(f"=== per-city round-robin: {per_city}/city × {len(CITIES)} cities ===\n")
             for name, path, province in CITIES:
