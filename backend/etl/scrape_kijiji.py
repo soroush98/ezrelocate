@@ -27,6 +27,7 @@ import json
 import re
 from urllib.parse import urljoin
 
+import httpx
 from selectolax.parser import HTMLParser
 
 from etl._scrape import (
@@ -396,8 +397,17 @@ async def _crawl(
         url = next_url(page)
         try:
             r = await client.get(url)
+        except httpx.HTTPStatusError as e:
+            # Surface the status so we can tell *why*: 403 = bot/IP block,
+            # 429 = rate-limited, 5xx = server-side. (Page 1 often succeeds
+            # while page 2+ gets blocked — that pattern points to throttling.)
+            ra = e.response.headers.get("Retry-After")
+            extra = f", Retry-After={ra}" if ra else ""
+            print(f"  [{label}] page {page} HTTP {e.response.status_code}{extra} "
+                  f"({e.request.url})")
+            break
         except Exception as e:
-            print(f"  [{label}] page {page} fetch failed ({e})")
+            print(f"  [{label}] page {page} fetch failed ({e!r})")
             break
 
         urls = _extract_listing_urls(r.text)

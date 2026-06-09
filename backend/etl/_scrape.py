@@ -12,14 +12,18 @@ from datetime import date
 from typing import Any
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from etl._common import connect
 
-USER_AGENT = (
+import os
+
+# Override via SCRAPER_USER_AGENT in production with a real contact address.
+# The default is intentionally generic to avoid PII in this public repo.
+USER_AGENT = os.environ.get(
+    "SCRAPER_USER_AGENT",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 "
-    "(KHTML, like Gecko) Version/17.0 Safari/605.1.15 "
-    "(+relocate portfolio crawler; contact: esmailian98@gmail.com)"
+    "(KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 )
 
 
@@ -46,6 +50,31 @@ class ScrapedListing:
     lease_length_months: int | None = None
     available_from: date | None = None
     description: str | None = None
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Retry only on transient failures: 429, 5xx, and network/timeout errors.
+
+    A 403 (bot/IP block) or 404 won't change on retry, so we let it propagate
+    immediately rather than burning the retry budget on a lost cause.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return code == 429 or code >= 500
+    return isinstance(exc, (httpx.TransportError, httpx.TimeoutException))
+
+
+_expo_wait = wait_exponential(min=2, max=20)
+
+
+def _wait_with_retry_after(retry_state) -> float:
+    """Honor a server's Retry-After header on 429, else exponential backoff."""
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    if isinstance(exc, httpx.HTTPStatusError):
+        ra = exc.response.headers.get("Retry-After", "")
+        if ra.isdigit():
+            return min(float(ra), 60.0)
+    return _expo_wait(retry_state)
 
 
 class PoliteClient:
@@ -78,7 +107,17 @@ class PoliteClient:
     async def __aexit__(self, *args) -> None:
         await self._client.aclose()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=20))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=_wait_with_retry_after,
+        # Only retry transient failures. A 403/404 won't fix itself on retry —
+        # failing fast both saves time and lets the caller see the real status.
+        retry=retry_if_exception(_is_retryable),
+        # Propagate the underlying HTTPStatusError instead of wrapping it in an
+        # opaque RetryError, so callers can read .response.status_code and log
+        # *why* a request failed (block vs throttle vs server error).
+        reraise=True,
+    )
     async def get(self, url: str) -> httpx.Response:
         async with self._sem:
             await asyncio.sleep(random.uniform(self._min, self._max))
