@@ -23,7 +23,6 @@ from collections import Counter
 from typing import Any
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from etl._common import connect
 
@@ -32,6 +31,16 @@ OVERPASS_ENDPOINTS = [
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
 ]
+
+# Bounded retry budget. We rotate through the mirrors (one per attempt) so a
+# single slow/throttled endpoint can't monopolise the budget the way the old
+# "recurse through all mirrors inside every tenacity attempt" design did — that
+# let one city spin for over an hour. Worst case now: ~MAX_ATTEMPTS requests
+# capped at (TIMEOUT_SECONDS+10)s each, plus bounded backoff.
+MAX_ATTEMPTS = 6
+BACKOFF_BASE = 5     # seconds; doubles each attempt
+BACKOFF_CAP = 60
+RETRYABLE_STATUS = {429, 502, 503, 504}
 
 # (poi_type, list-of-Overpass-filter-stanzas).
 # Each stanza is appended to node/way/relation queries inside the bounding box.
@@ -159,26 +168,48 @@ def _stanza_matches(stanza: str, tags: dict[str, str]) -> bool:
     return True
 
 
-@retry(stop=stop_after_attempt(4), wait=wait_exponential(min=8, max=120))
-async def overpass_query(
-    client: httpx.AsyncClient, query: str, endpoint_idx: int = 0
-) -> list[dict]:
-    """POST a query to Overpass, falling through mirrors on hard failures."""
-    try:
-        r = await client.post(
-            OVERPASS_ENDPOINTS[endpoint_idx],
-            data={"data": query},
-            timeout=TIMEOUT_SECONDS + 10,
-        )
-        if r.status_code == 429 or r.status_code >= 500:
-            r.raise_for_status()
-        r.raise_for_status()
-        return r.json().get("elements", [])
-    except Exception:
-        # Try next mirror once before propagating to tenacity's retry.
-        if endpoint_idx + 1 < len(OVERPASS_ENDPOINTS):
-            return await overpass_query(client, query, endpoint_idx + 1)
-        raise
+def _host(endpoint: str) -> str:
+    """overpass-api.de etc. — short label for logs."""
+    return endpoint.split("//", 1)[-1].split("/", 1)[0]
+
+
+async def overpass_query(client: httpx.AsyncClient, query: str) -> list[dict]:
+    """POST a query to Overpass with a bounded, mirror-rotating retry loop.
+
+    Rotates one mirror per attempt and backs off between attempts. Surfaces the
+    HTTP status and any Retry-After so the logs say *why* a fetch failed
+    (429 = throttle, 5xx = server, 4xx = bad query) instead of an opaque error.
+    Bails immediately on a non-retryable status. Raises after MAX_ATTEMPTS.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(MAX_ATTEMPTS):
+        endpoint = OVERPASS_ENDPOINTS[attempt % len(OVERPASS_ENDPOINTS)]
+        try:
+            r = await client.post(
+                endpoint, data={"data": query}, timeout=TIMEOUT_SECONDS + 10
+            )
+        except (httpx.TransportError, httpx.TimeoutException) as e:
+            last_exc = e
+            print(f"    {_host(endpoint)}: {type(e).__name__} (attempt {attempt + 1})")
+        else:
+            if r.status_code == 200:
+                return r.json().get("elements", [])
+            retry_after = r.headers.get("Retry-After")
+            note = f" · Retry-After {retry_after}s" if retry_after else ""
+            print(f"    {_host(endpoint)}: HTTP {r.status_code}{note} "
+                  f"(attempt {attempt + 1})")
+            last_exc = httpx.HTTPStatusError(
+                f"HTTP {r.status_code} from {_host(endpoint)}",
+                request=r.request, response=r,
+            )
+            if r.status_code not in RETRYABLE_STATUS:
+                raise last_exc  # e.g. 400 bad query — retrying won't help
+
+        if attempt < MAX_ATTEMPTS - 1:
+            await asyncio.sleep(min(BACKOFF_CAP, BACKOFF_BASE * 2 ** attempt))
+
+    assert last_exc is not None
+    raise last_exc
 
 
 def element_latlng(el: dict) -> tuple[float, float] | None:
@@ -224,6 +255,12 @@ async def ingest_city(client: httpx.AsyncClient, city: dict, dry_run: bool) -> d
         ))
         type_counts[poi_type] += 1
 
+    if not elements:
+        # 0 elements for a real city almost always means we gave up against a
+        # throttled mirror, not that the city is empty. Flag it loudly so it
+        # doesn't hide behind a green run.
+        print(f"  !! WARNING: {city['city']} returned 0 OSM elements "
+              f"(likely throttled/empty response)")
     print(f"  fetched {len(elements)} OSM elements · classified {len(rows)} · "
           f"skipped {skipped_unclassified} unclassified")
     for t in _CATEGORY_PRIORITY:
@@ -231,7 +268,7 @@ async def ingest_city(client: httpx.AsyncClient, city: dict, dry_run: bool) -> d
             print(f"    {t:11s} {type_counts[t]:>6d}")
 
     if dry_run or not rows:
-        return {"city": city["city"], "kept": len(rows)}
+        return {"city": city["city"], "kept": len(rows), "fetched": len(elements)}
 
     # Batched upsert: one round-trip per chunk via unnest. The old per-row
     # loop was ~200ms × N round-trips, which for big cities (~30k rows) takes
@@ -272,7 +309,7 @@ async def ingest_city(client: httpx.AsyncClient, city: dict, dry_run: bool) -> d
                 else:
                     updated += 1
     print(f"  upsert: +{inserted} new · {updated} refreshed")
-    return {"city": city["city"], "kept": len(rows),
+    return {"city": city["city"], "kept": len(rows), "fetched": len(elements),
             "inserted": inserted, "updated": updated}
 
 
@@ -285,22 +322,43 @@ async def main(only_city: str | None, dry_run: bool) -> None:
     print(f"=== OSM POI ingest · {len(cities)} cities ===")
     print(f"categories: {', '.join(t for t, _ in CATEGORIES)}")
 
-    async with httpx.AsyncClient(
-        headers={"User-Agent": "EZrelocate-OSM-ingest (esmailian98@gmail.com)"},
-    ) as client:
+    # Overpass etiquette: identify yourself. Override via env in production so
+    # the upstream can contact a real owner; the public default is intentionally
+    # generic to avoid PII in this repo.
+    import os
+    ua = os.environ.get(
+        "OVERPASS_USER_AGENT",
+        "EZrelocate-OSM-ingest (+https://github.com/Soroush98/EZrelocate)",
+    )
+    async with httpx.AsyncClient(headers={"User-Agent": ua}) as client:
         results = []
+        failed: list[str] = []
         for i, city in enumerate(cities, 1):
             try:
                 r = await ingest_city(client, city, dry_run)
                 results.append(r)
             except Exception as e:
                 print(f"  !! {city['city']} failed: {type(e).__name__}: {e}")
+                failed.append(city["city"])
             # Be nice — Overpass instances are donated infra.
             if i < len(cities):
                 await asyncio.sleep(3)
 
     total_kept = sum(r.get("kept", 0) for r in results)
+    empty = [r["city"] for r in results if r.get("fetched", 0) == 0]
     print(f"\n=== done · {total_kept} POIs across {len(results)} cities ===")
+
+    # Don't let a throttled Overpass hide behind a green checkmark. If more than
+    # a quarter of cities errored out or came back empty, fail the run so the
+    # scheduled workflow surfaces it instead of silently shipping stale data.
+    degraded = failed + empty
+    if degraded:
+        print(f"  !! {len(failed)} failed, {len(empty)} empty: "
+              f"{', '.join(degraded)}", file=sys.stderr)
+    if len(degraded) > len(cities) // 4:
+        print(f"!! OSM ingest degraded: {len(degraded)}/{len(cities)} cities "
+              f"failed or empty — failing the run", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
