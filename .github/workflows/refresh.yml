@@ -43,9 +43,12 @@ jobs:
       - name: Kijiji round-robin (500 per city)
         run: python -u -m etl.scrape_kijiji --per-city 500
 
-      - name: OSM POI refresh
-        run: python -u -m etl.load_osm_pois
-
+      # POI ingest is NOT here on purpose: OSM POIs (cafes, transit, parks) are
+      # static infrastructure that changes far slower than listings, and the
+      # public Overpass API rate-limits CI IPs hard. POIs are refreshed by the
+      # separate, weekly "OSM POI refresh" workflow (Geofabrik offline extract).
+      # This step just recomputes distances against the POIs already in the DB —
+      # pure PostGIS, no external API, so the nightly run is fast and reliable.
       - name: Recompute per-listing amenity distances
         run: python -u -m etl.compute_amenity_distances
 
