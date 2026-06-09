@@ -94,29 +94,59 @@ TIMEOUT_SECONDS = 60    # per-tile query budget; tiles are small so this is plen
 # a grid of tiles this size keeps every query light enough to complete.
 TILE_MAX_SPAN_DEG = 0.18  # ≈ 20km/side
 
+# Clamp each city's bbox to this half-span (deg) around the centroid of its
+# listings. Kijiji's location names are messy: a few listings mislabelled
+# "City of Toronto" actually sit hundreds of km away, and a raw min/max extent
+# balloons the bbox (one such outlier produced a 3.3°×7.5° box → ~800 tiles).
+# The centroid is robust when most points cluster, so clamping drops the
+# outliers while still covering any real metro (~1° wide at 0.5 half-span).
+MAX_CITY_HALF_SPAN_DEG = 0.5
+# Skip "cities" with fewer than this many listings — the long tail is mostly
+# neighbourhood-name noise, not real towns worth a separate POI sweep.
+MIN_LISTINGS_PER_CITY = 3
+# Hard backstop so a single city can never explode into a runaway tile count.
+MAX_TILES_PER_CITY = 36
+
 
 async def fetch_city_bboxes(only_city: str | None) -> list[dict]:
     """Compute bounding boxes from existing active listings, one row per city.
+
+    The bbox is the listings' extent *clamped* to MAX_CITY_HALF_SPAN_DEG around
+    their centroid, so a handful of mislabelled/outlier coordinates can't inflate
+    a city into a giant box (and a runaway tile count). Cities below
+    MIN_LISTINGS_PER_CITY are skipped as location-name noise.
 
     Order: highest listing-count first so demoable cities (Toronto / Montreal /
     Vancouver / Calgary / Edmonton) finish before the long tail of small towns.
     """
     sql = """
+        WITH agg AS (
+            SELECT
+                city,
+                province,
+                ST_Extent(location)::geometry            AS ext,
+                ST_Centroid(ST_Collect(location))        AS ctr,
+                COUNT(*)::int                            AS listing_count
+            FROM listings
+            WHERE status = 'active' AND location IS NOT NULL
+            GROUP BY city, province
+        )
         SELECT
             city,
             province,
-            ST_YMin(ST_Extent(location)::geometry) - $1::float8 AS south,
-            ST_XMin(ST_Extent(location)::geometry) - $1::float8 AS west,
-            ST_YMax(ST_Extent(location)::geometry) + $1::float8 AS north,
-            ST_XMax(ST_Extent(location)::geometry) + $1::float8 AS east,
-            COUNT(*)::int AS listing_count
-        FROM listings
-        WHERE status = 'active' AND location IS NOT NULL
-        GROUP BY city, province
+            listing_count,
+            GREATEST(ST_YMin(ext), ST_Y(ctr) - $2::float8) - $1::float8 AS south,
+            GREATEST(ST_XMin(ext), ST_X(ctr) - $2::float8) - $1::float8 AS west,
+            LEAST(ST_YMax(ext),    ST_Y(ctr) + $2::float8) + $1::float8 AS north,
+            LEAST(ST_XMax(ext),    ST_X(ctr) + $2::float8) + $1::float8 AS east
+        FROM agg
+        WHERE listing_count >= $3::int
         ORDER BY listing_count DESC
     """
     async with connect() as conn:
-        rows = await conn.fetch(sql, BBOX_BUFFER_DEG)
+        rows = await conn.fetch(
+            sql, BBOX_BUFFER_DEG, MAX_CITY_HALF_SPAN_DEG, MIN_LISTINGS_PER_CITY
+        )
     cities = [dict(r) for r in rows]
     if only_city:
         cities = [c for c in cities if only_city.lower() in c["city"].lower()]
@@ -130,10 +160,17 @@ def split_bbox(
 
     A small city stays one tile; a big metro becomes a 2×2 or 3×3 grid so each
     Overpass query covers a manageable area and doesn't time out server-side.
+    Capped at MAX_TILES_PER_CITY tiles as a backstop against a degenerate bbox.
     """
     south, west, north, east = bbox
     n_lat = max(1, math.ceil((north - south) / TILE_MAX_SPAN_DEG))
     n_lng = max(1, math.ceil((east - west) / TILE_MAX_SPAN_DEG))
+    if n_lat * n_lng > MAX_TILES_PER_CITY:
+        # Scale both dimensions down proportionally to fit the cap. Tiles get
+        # larger than TILE_MAX_SPAN_DEG, but a bounded count beats a runaway one.
+        scale = (MAX_TILES_PER_CITY / (n_lat * n_lng)) ** 0.5
+        n_lat = max(1, int(n_lat * scale))
+        n_lng = max(1, int(n_lng * scale))
     tiles = []
     for i in range(n_lat):
         for j in range(n_lng):
@@ -403,9 +440,11 @@ async def main(only_city: str | None, dry_run: bool) -> None:
             except Exception as e:
                 print(f"  !! {city['city']} failed: {type(e).__name__}: {e}")
                 failed.append(city["city"])
-            # Be nice — Overpass instances are donated infra.
+            # Be nice — Overpass instances are donated infra. Each city already
+            # makes several per-tile requests with backoff, so a short pause
+            # between cities is plenty (and keeps the long city list moving).
             if i < len(cities):
-                await asyncio.sleep(3)
+                await asyncio.sleep(1)
 
     total_kept = sum(r.get("kept", 0) for r in results)
     empty = [r["city"] for r in results if r.get("fetched", 0) == 0]
