@@ -64,7 +64,7 @@ def _is_retryable(exc: BaseException) -> bool:
     return isinstance(exc, (httpx.TransportError, httpx.TimeoutException))
 
 
-_expo_wait = wait_exponential(min=2, max=20)
+_expo_wait = wait_exponential(min=3, max=30)
 
 
 def _wait_with_retry_after(retry_state) -> float:
@@ -108,7 +108,7 @@ class PoliteClient:
         await self._client.aclose()
 
     @retry(
-        stop=stop_after_attempt(3),
+        stop=stop_after_attempt(5),
         wait=_wait_with_retry_after,
         # Only retry transient failures. A 403/404 won't fix itself on retry —
         # failing fast both saves time and lets the caller see the real status.
