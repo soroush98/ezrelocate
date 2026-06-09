@@ -7,6 +7,7 @@ from app.db import close_pool, init_pool
 from app.routes import billing as billing_routes
 from app.routes import nearby as nearby_routes
 from app.routes import query as query_routes
+from app.routes import stats as stats_routes
 
 
 @asynccontextmanager
@@ -35,6 +36,7 @@ app.add_middleware(
 app.include_router(query_routes.router, prefix="/api")
 app.include_router(nearby_routes.router, prefix="/api")
 app.include_router(billing_routes.router, prefix="/api")
+app.include_router(stats_routes.router, prefix="/api")
 
 
 @app.get("/health")

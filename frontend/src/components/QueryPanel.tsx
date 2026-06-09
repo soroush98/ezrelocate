@@ -26,7 +26,7 @@ const SAMPLES = [
 
 const LOADING_STAGES = [
   "Understanding your request",
-  "Filtering 4,400 listings",
+  "Filtering {count} listings",
   "Ranking by neighbourhood fit",
   "Writing your recommendation",
 ];
@@ -49,6 +49,28 @@ export function QueryPanel({ onResult, selectedId, hoveredId, onHover, onSelect 
   const [quotaBlock, setQuotaBlock] = useState<QuotaBlock | null>(null);
   const [authOpen, setAuthOpen] = useState(false);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
+  const [listingCount, setListingCount] = useState<number | null>(null);
+
+  // Live corpus size for the UI — fetched once so we show the real number of
+  // searchable listings instead of a hardcoded figure.
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch("/api/stats")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d && typeof d.listings === "number") {
+          setListingCount(d.listings);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Formatted count label, e.g. "4,387"; falls back to a neutral word until the
+  // real number lands so we never flash a wrong figure.
+  const countLabel = listingCount !== null ? listingCount.toLocaleString() : "all";
 
   // Cycle the loading stage so the spinner shows visible progress
   useEffect(() => {
@@ -176,7 +198,7 @@ export function QueryPanel({ onResult, selectedId, hoveredId, onHover, onSelect 
           doesn't cover the last card. */}
       <div className="flex-1 overflow-y-auto pb-20 md:pb-0">
         {loading && (
-          <LoadingState stage={stage} />
+          <LoadingState stage={stage} countLabel={countLabel} />
         )}
 
         {error && !loading && (
@@ -245,7 +267,7 @@ export function QueryPanel({ onResult, selectedId, hoveredId, onHover, onSelect 
               <div className="mt-5">
                 <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-wider text-ink-muted">
                   <span>Top matches</span>
-                  <span>{result.listings.length} of 4,400+</span>
+                  <span>{result.listings.length} of {countLabel}</span>
                 </div>
                 <ol className="space-y-2.5">
                   {result.listings.map((l, i) => (
@@ -269,13 +291,13 @@ export function QueryPanel({ onResult, selectedId, hoveredId, onHover, onSelect 
           </div>
         )}
 
-        {!loading && !result && !error && <EmptyState />}
+        {!loading && !result && !error && <EmptyState countLabel={countLabel} />}
       </div>
     </aside>
   );
 }
 
-function LoadingState({ stage }: { stage: number }) {
+function LoadingState({ stage, countLabel }: { stage: number; countLabel: string }) {
   return (
     <div className="px-4 pt-8 md:px-6 md:pt-8">
       <div className="rl-pulse mb-4 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[11px] text-ink-2">
@@ -306,7 +328,7 @@ function LoadingState({ stage }: { stage: number }) {
             >
               {i < stage ? "✓" : i + 1}
             </span>
-            {s}
+            {s.replace("{count}", countLabel)}
           </li>
         ))}
       </ul>
@@ -314,7 +336,7 @@ function LoadingState({ stage }: { stage: number }) {
   );
 }
 
-function EmptyState() {
+function EmptyState({ countLabel }: { countLabel: string }) {
   return (
     <div className="px-4 pt-8 md:px-6 md:pt-10">
       <div className="rounded-xl border border-dashed border-line bg-white/60 px-4 py-8 text-center">
@@ -324,7 +346,7 @@ function EmptyState() {
         <h3 className="mt-3 text-sm font-semibold text-ink">Ask in plain English</h3>
         <p className="mx-auto mt-1 max-w-xs text-xs leading-relaxed text-ink-muted">
           Describe what matters — neighbourhood vibe, commute, budget, pets. Claude turns it
-          into filters; pgvector ranks 4,400+ listings; PostGIS handles location.
+          into filters; pgvector ranks {countLabel} listings; PostGIS handles location.
         </p>
         <p className="mt-3 text-[10px] uppercase tracking-wider text-ink-muted/80">
           Try a sample query above
