@@ -56,7 +56,7 @@ async def main() -> None:
             "SELECT COUNT(*) FROM listings WHERE status='active' AND location IS NOT NULL"
         )
         if poi_count == 0:
-            print("no POIs in the DB yet — run etl/load_osm_pois first")
+            print("no POIs in the DB yet — run etl/load_osm_pois_geofabrik first")
             return
         print(f"computing distances · {active_listings} active listings · {poi_count} POIs")
 

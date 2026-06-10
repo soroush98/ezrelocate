@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # EZrelocate — nightly refresh.
-# Re-scrapes Kijiji (round-robin across cities), refreshes OSM POIs,
-# recomputes per-listing amenity distances, then embeds new listings,
-# and marks stale rows.
+# Re-scrapes Kijiji (round-robin across cities), recomputes per-listing amenity
+# distances, then embeds new listings, and marks stale rows.
+#
+# OSM POIs are static infrastructure and load on a separate weekly schedule
+# (.github/workflows/osm-pois.yml → etl.load_osm_pois_geofabrik), so they're
+# intentionally NOT refreshed here.
 #
 # Designed to be cron / launchd / GitHub Actions friendly:
 #   - Resolves its own location, doesn't depend on caller's CWD
@@ -38,9 +41,6 @@ echo "=== $(date -Iseconds) EZrelocate refresh starting ==="
 
 echo "--- Kijiji round-robin (100 per city) ---"
 python -u -m etl.scrape_kijiji --per-city 100
-
-echo "--- OSM POI refresh (weekly is enough; runs nightly here for simplicity) ---"
-python -u -m etl.load_osm_pois
 
 echo "--- Recomputing per-listing amenity distances ---"
 python -u -m etl.compute_amenity_distances

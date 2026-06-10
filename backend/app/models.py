@@ -3,8 +3,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-# Canonical amenity categories. Keep in sync with etl/load_osm_pois.CATEGORIES
-# and the frontend lib/types.ts. Used to validate Claude's `near_amenities`.
+# Canonical amenity categories. Keep in sync with
+# etl/load_osm_pois_geofabrik.CATEGORIES and the frontend lib/types.ts.
+# Used to validate Claude's `near_amenities`.
 AmenityCategory = Literal[
     "subway", "lrt", "train", "bus_stop",
     "grocery", "cafe", "pharmacy",

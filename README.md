@@ -45,13 +45,15 @@ results. See [Nightly refresh](#nightly-refresh) below.
 ```
 .
 ├── .github/workflows/
-│   └── refresh.yml                      # GitHub Actions — nightly refresh job
+│   ├── refresh.yml                      # GitHub Actions — nightly Kijiji refresh
+│   └── osm-pois.yml                     # GitHub Actions — weekly OSM POI load
 ├── infra/
 │   ├── Dockerfile                       # postgres:17-bookworm + postgis + pgvector
 │   ├── docker-compose.yml
 │   └── init/01-extensions.sql           # CREATE EXTENSION postgis, vector, pg_trgm
 ├── db/
-│   └── schema.sql                       # listings, neighborhoods (+ HNSW & GIST indexes)
+│   └── schema.sql                       # single source of truth: listings, pois,
+│                                        #   auth/billing/usage (+ HNSW & GIST indexes)
 ├── backend/
 │   ├── pyproject.toml
 │   ├── app/
@@ -59,14 +61,19 @@ results. See [Nightly refresh](#nightly-refresh) below.
 │   │   ├── config.py                    # pydantic-settings
 │   │   ├── db.py                        # asyncpg pool
 │   │   ├── models.py                    # Pydantic request/response types
-│   │   ├── routes/query.py              # POST /api/query
+│   │   ├── routes/                      # query, billing, nearby, stats
 │   │   └── services/
+│   │       ├── auth.py                  # Supabase JWT verify + client IP
+│   │       ├── quota.py                 # per-tier query quota gates
+│   │       ├── query_log.py             # full-text query logging
 │   │       ├── embeddings.py            # Voyage AI wrapper
 │   │       ├── llm.py                   # Claude parse + generate
 │   │       └── retrieval.py             # Hybrid SQL + pgvector + PostGIS
 │   ├── etl/
 │   │   ├── _scrape.py                   # PoliteClient, ScrapedListing, upsert, mark_stale
 │   │   ├── scrape_kijiji.py             # National per-city round-robin scraper
+│   │   ├── load_osm_pois_geofabrik.py   # Offline OSM POI loader (Geofabrik .pbf)
+│   │   ├── compute_amenity_distances.py # Per-listing nearest-amenity distances
 │   │   └── embed_all.py                 # Voyage backfill for active listings
 │   └── scripts/
 │       ├── init_db.sh                   # Apply db/schema.sql
@@ -74,8 +81,8 @@ results. See [Nightly refresh](#nightly-refresh) below.
 ├── frontend/                            # Next.js 16 · Tailwind v4 · MapLibre · Geist
 │   └── src/
 │       ├── app/{layout,page}.tsx
-│       ├── components/{Map,QueryPanel,ListingCard,FilterChips,Pill,Icon}.tsx
-│       └── lib/types.ts
+│       ├── components/{Map,QueryPanel,ListingCard,AccountBar,AuthModal,...}.tsx
+│       └── lib/{types,auth,supabase}.ts
 └── .env.example
 ```
 
@@ -173,7 +180,6 @@ Response:
       "pet_friendly": true,
       "utilities_included": ["heat", "water"],
       "city": "City of Toronto", "province": "ON",
-      "neighborhood": null,
       "lat": 43.66, "lng": -79.33,
       "score": 0.78
     }
@@ -189,7 +195,7 @@ own, and you do not need to touch it.
 
 ### What it does, in plain English
 
-Every night the system wakes up and does four things in order:
+Every night the system wakes up and does three things in order:
 
 1. **Scrape Kijiji.** Walk through 22 Canadian cities and grab up to 500
    apartment / house listings from each (round-robin, so coverage stays
@@ -197,15 +203,19 @@ Every night the system wakes up and does four things in order:
    before just have their "last seen" timestamp bumped. Small cities exhaust
    well before 500 and stop early, so the realistic nightly haul is around
    7,000–8,000 listings.
-2. **Refresh map data.** Pull the latest OpenStreetMap points of interest
-   (subway stations, parks, grocery stores, schools, etc.) for the same cities.
-3. **Recompute walking distances.** For every listing, work out how far it is
+2. **Recompute walking distances.** For every listing, work out how far it is
    to the nearest subway, park, school, and so on. These numbers are stored
    right on the listing row, so the search side never has to compute them
    live.
-4. **Embed only the new listings.** Send the brand-new listings to Voyage AI to
+3. **Embed only the new listings.** Send the brand-new listings to Voyage AI to
    turn their text into vectors. Old listings keep the vectors they already
    have, so this step is fast and cheap.
+
+The map data itself — OpenStreetMap points of interest (subway stations, parks,
+grocery stores, schools, etc.) — is static infrastructure, so it loads on a
+**separate weekly schedule** ([.github/workflows/osm-pois.yml](.github/workflows/osm-pois.yml))
+rather than every night. It reads offline Geofabrik province extracts instead of
+the rate-limited public Overpass API, so it never gets throttled.
 
 Anything that has not been seen on Kijiji for 72 hours is marked `stale` and
 silently drops out of search results.

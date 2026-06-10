@@ -6,9 +6,9 @@ infrastructure, so we don't need a live API: download each province's
 `.osm.pbf` from Geofabrik once, stream-extract the POIs we care about with
 pyosmium, and upsert into `pois`. Reliable and rate-limit free.
 
-Classification reuses etl.load_osm_pois.classify(), so POIs land with the exact
-same poi_type and `osm:<type>:<id>` source_id as the old Overpass path — re-runs
-just upsert, no duplicates.
+Classification (classify/CATEGORIES below) maps OSM tags → our internal
+poi_type, so POIs land with a stable `osm:<type>:<id>` source_id — re-runs just
+upsert, no duplicates.
 
 Run:
     cd backend && python -m etl.load_osm_pois_geofabrik              # all provinces with listings
@@ -27,7 +27,77 @@ import httpx
 import osmium
 
 from etl._common import connect
-from etl.load_osm_pois import classify
+
+# (poi_type, list-of-OSM-tag-filter-stanzas). Each stanza is an Overpass-style
+# tag filter like '["amenity"="cafe"]'; classify() checks them in declaration
+# order and the first match wins, so e.g. a subway entrance never gets labelled
+# bus_stop. Keep in sync with app/models.AmenityCategory and frontend types.ts.
+CATEGORIES: list[tuple[str, list[str]]] = [
+    ("subway",     ['["railway"="subway_entrance"]',
+                    '["public_transport"="station"]["subway"="yes"]',
+                    '["station"="subway"]']),
+    ("lrt",        ['["railway"="tram_stop"]',
+                    '["railway"="light_rail"]',
+                    '["station"="light_rail"]']),
+    ("train",      ['["railway"="station"]["station"!="subway"]["station"!="light_rail"]',
+                    '["railway"="halt"]']),
+    ("bus_stop",   ['["highway"="bus_stop"]']),
+    ("grocery",    ['["shop"="supermarket"]',
+                    '["shop"="convenience"]']),
+    ("cafe",       ['["amenity"="cafe"]',
+                    '["shop"="coffee"]']),
+    ("pharmacy",   ['["amenity"="pharmacy"]']),
+    ("park",       ['["leisure"="park"]',
+                    '["leisure"="playground"]']),
+    ("school",     ['["amenity"="school"]',
+                    '["amenity"="kindergarten"]',
+                    '["amenity"="childcare"]']),
+    ("university", ['["amenity"="university"]',
+                    '["amenity"="college"]']),
+    ("library",    ['["amenity"="library"]']),
+    ("gym",        ['["leisure"="fitness_centre"]',
+                    '["leisure"="sports_centre"]']),
+    ("hospital",   ['["amenity"="hospital"]',
+                    '["amenity"="clinic"]']),
+]
+
+
+def classify(tags: dict[str, str]) -> str | None:
+    """Map an OSM element's tags → our internal poi_type.
+
+    Each category's stanzas are checked in declaration order. Returns the
+    first match, so e.g. a subway entrance never gets labelled bus_stop.
+    """
+    for poi_type, stanzas in CATEGORIES:
+        for stanza in stanzas:
+            if _stanza_matches(stanza, tags):
+                return poi_type
+    return None
+
+
+def _stanza_matches(stanza: str, tags: dict[str, str]) -> bool:
+    """Parse a filter like '["amenity"="cafe"]' and check tags.
+
+    Supports k="v" equality and k!="v" inequality (no regex, no fancy stuff).
+    """
+    # Strip outer brackets, split on `][`, parse each pair
+    body = stanza.strip("[]")
+    pairs = body.split("][")
+    for raw in pairs:
+        if "!=" in raw:
+            k, v = raw.split("!=", 1)
+            if tags.get(k.strip('"')) == v.strip('"'):
+                return False
+        elif "=" in raw:
+            k, v = raw.split("=", 1)
+            if tags.get(k.strip('"')) != v.strip('"'):
+                return False
+        else:
+            # tag-presence only, e.g. ["wheelchair"]
+            if raw.strip('"') not in tags:
+                return False
+    return True
+
 
 # Province code → Geofabrik Canada sub-extract slug.
 PROVINCE_SLUGS: dict[str, str] = {
