@@ -21,6 +21,10 @@ jobs:
         working-directory: backend
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # The loader only touches the DB, but app.config.Settings (loaded via the
+      # shared connect()) requires these keys to construct — pass them through.
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
       APP_ENV: prod
       LOG_LEVEL: INFO
       PYTHONUNBUFFERED: "1"
