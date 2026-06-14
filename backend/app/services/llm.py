@@ -6,6 +6,7 @@ each listing's actual nearest-amenity distances in metres, so it can cite real
 numbers ("320m from St. Clair West Station") instead of guessing.
 """
 
+import asyncio
 import json
 
 from anthropic import AsyncAnthropic
@@ -13,7 +14,22 @@ from anthropic import AsyncAnthropic
 from app.config import get_settings
 from app.models import ListingOut, ParsedQuery
 
+# Per-request deadlines so a slow upstream can't pin a connection indefinitely.
+# Generation streams more tokens than parsing, so it gets a longer budget.
+PARSE_TIMEOUT_S = 30.0
+GENERATE_TIMEOUT_S = 45.0
+
 _client: AsyncAnthropic | None = None
+
+
+def _strip_code_fence(raw: str) -> str:
+    """Drop a ```/```json wrapper if the model fenced its JSON despite the prompt."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`")
+        if raw.lower().startswith("json"):
+            raw = raw[4:]
+    return raw.strip()
 
 
 def _client_singleton() -> AsyncAnthropic:
@@ -109,17 +125,16 @@ Rules:
 
 async def parse_query(user_query: str) -> ParsedQuery:
     settings = get_settings()
-    msg = await _client_singleton().messages.create(
-        model=settings.anthropic_model,
-        max_tokens=512,
-        system=PARSER_SYSTEM,
-        messages=[{"role": "user", "content": user_query}],
+    async with asyncio.timeout(PARSE_TIMEOUT_S):
+        msg = await _client_singleton().messages.create(
+            model=settings.anthropic_model,
+            max_tokens=512,
+            system=PARSER_SYSTEM,
+            messages=[{"role": "user", "content": user_query}],
+        )
+    raw = _strip_code_fence(
+        "".join(block.text for block in msg.content if block.type == "text")
     )
-    raw = "".join(block.text for block in msg.content if block.type == "text").strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.lower().startswith("json"):
-            raw = raw[4:].strip()
     try:
         data = json.loads(raw)
         return ParsedQuery(**data)
@@ -177,12 +192,13 @@ async def generate_recommendation(
     payload = {
         "user_query": user_query,
         "parsed_filters": parsed.model_dump(mode="json"),
-        "candidates": [l.model_dump(mode="json") for l in listings],
+        "candidates": [listing.model_dump(mode="json") for listing in listings],
     }
-    msg = await _client_singleton().messages.create(
-        model=settings.anthropic_model,
-        max_tokens=900,
-        system=GENERATOR_SYSTEM,
-        messages=[{"role": "user", "content": json.dumps(payload, indent=2)}],
-    )
+    async with asyncio.timeout(GENERATE_TIMEOUT_S):
+        msg = await _client_singleton().messages.create(
+            model=settings.anthropic_model,
+            max_tokens=900,
+            system=GENERATOR_SYSTEM,
+            messages=[{"role": "user", "content": json.dumps(payload, indent=2)}],
+        )
     return "".join(block.text for block in msg.content if block.type == "text").strip()

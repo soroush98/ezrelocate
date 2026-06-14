@@ -5,6 +5,7 @@ requests (semaphore) and inserts a per-request jitter so we don't hammer sites.
 """
 
 import asyncio
+import os
 import random
 import re
 from dataclasses import dataclass, field
@@ -15,8 +16,6 @@ import httpx
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from etl._common import connect
-
-import os
 
 # Override via SCRAPER_USER_AGENT in production with a real contact address.
 # The default is intentionally generic to avoid PII in this public repo.
@@ -61,7 +60,7 @@ def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
         return code == 429 or code >= 500
-    return isinstance(exc, (httpx.TransportError, httpx.TimeoutException))
+    return isinstance(exc, httpx.TransportError | httpx.TimeoutException)
 
 
 _expo_wait = wait_exponential(min=2, max=15)
@@ -160,7 +159,7 @@ def parse_money(value: Any) -> int | None:
     """Pull a $-amount out of a string or number, return as integer dollars."""
     if value is None:
         return None
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return int(value)
     m = _PRICE_RE.search(str(value).replace(",", ""))
     if not m:
@@ -214,37 +213,36 @@ async def upsert_listings(rows: list[ScrapedListing]) -> tuple[int, int]:
     """
 
     inserted = updated = 0
-    async with connect() as conn:
-        async with conn.transaction():
-            for r in rows:
-                row = await conn.fetchrow(
-                    sql,
-                    r.source,
-                    r.source_id,
-                    r.url,
-                    r.title,
-                    r.address,
-                    r.city,
-                    r.province,
-                    r.postal_code,
-                    r.lng,
-                    r.lat,
-                    r.monthly_rent,
-                    r.bedrooms,
-                    r.bathrooms,
-                    r.sqft,
-                    r.property_type,
-                    r.furnished,
-                    r.pet_friendly,
-                    r.utilities_included,
-                    r.lease_length_months,
-                    r.available_from,
-                    r.description,
-                )
-                if row["inserted"]:
-                    inserted += 1
-                else:
-                    updated += 1
+    async with connect() as conn, conn.transaction():
+        for r in rows:
+            row = await conn.fetchrow(
+                sql,
+                r.source,
+                r.source_id,
+                r.url,
+                r.title,
+                r.address,
+                r.city,
+                r.province,
+                r.postal_code,
+                r.lng,
+                r.lat,
+                r.monthly_rent,
+                r.bedrooms,
+                r.bathrooms,
+                r.sqft,
+                r.property_type,
+                r.furnished,
+                r.pet_friendly,
+                r.utilities_included,
+                r.lease_length_months,
+                r.available_from,
+                r.description,
+            )
+            if row["inserted"]:
+                inserted += 1
+            else:
+                updated += 1
     return inserted, updated
 
 

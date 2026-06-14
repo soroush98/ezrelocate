@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.models import RecommendationResponse
@@ -34,23 +34,39 @@ async def query(
     # Quota gate runs BEFORE any LLM/embedding spend. Raises 402/429 on rejection.
     ctx = await enforce_query_quota(user, get_client_ip(request))
 
-    parsed = await parse_query(req.query)
+    try:
+        parsed = await parse_query(req.query)
 
-    if parsed.out_of_scope:
-        await record_query(ctx, req.query, out_of_scope=True, listing_count=0)
-        return RecommendationResponse(
-            query=req.query,
-            parsed=parsed,
-            listings=[],
-            reasoning=parsed.rejection_reason or _DEFAULT_REJECTION,
+        if parsed.out_of_scope:
+            await record_query(ctx, req.query, out_of_scope=True, listing_count=0)
+            return RecommendationResponse(
+                query=req.query,
+                parsed=parsed,
+                listings=[],
+                reasoning=parsed.rejection_reason or _DEFAULT_REJECTION,
+            )
+
+        listings = await retrieve(parsed)
+        reasoning = (
+            await generate_recommendation(req.query, parsed, listings)
+            if listings
+            else (
+                "No listings match those hard filters — "
+                "try widening the price range or bedroom count."
+            )
         )
+    except TimeoutError:
+        # An upstream (Claude / Voyage) blew its per-request deadline. Surface a
+        # retryable 503 rather than a 500 — the quota increment already happened,
+        # but a timed-out search shouldn't read as a successful one.
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "upstream_timeout",
+                "message": "Search took too long to respond — please try again.",
+            },
+        ) from None
 
-    listings = await retrieve(parsed)
-    reasoning = (
-        await generate_recommendation(req.query, parsed, listings)
-        if listings
-        else "No listings match those hard filters — try widening the price range or bedroom count."
-    )
     await record_query(ctx, req.query, out_of_scope=False, listing_count=len(listings))
     return RecommendationResponse(
         query=req.query,

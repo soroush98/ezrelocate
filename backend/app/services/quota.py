@@ -11,6 +11,7 @@ over the limit and the call is rejected — no LLM tokens spent.
 """
 
 from dataclasses import dataclass
+from datetime import UTC
 from enum import Enum
 
 from fastapi import HTTPException
@@ -52,8 +53,8 @@ async def _get_subscription_status(user_id: str) -> bool:
     if cpe is None:
         return False
     # Compare in UTC; asyncpg returns timezone-aware datetimes.
-    from datetime import datetime, timezone
-    return cpe > datetime.now(timezone.utc)
+    from datetime import datetime
+    return cpe > datetime.now(UTC)
 
 
 async def enforce_query_quota(user: AuthUser | None, ip: str) -> QuotaContext:

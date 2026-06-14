@@ -89,7 +89,10 @@ def optional_user(authorization: str | None = Header(default=None)) -> AuthUser 
         if alg == "HS256":
             secret = settings.supabase_jwt_secret
             if not secret:
-                raise HTTPException(status_code=500, detail="auth not configured (need SUPABASE_JWT_SECRET)")
+                raise HTTPException(
+                    status_code=500,
+                    detail="auth not configured (need SUPABASE_JWT_SECRET)",
+                )
             payload = jwt.decode(
                 token, secret, algorithms=["HS256"], audience="authenticated"
             )

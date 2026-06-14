@@ -10,7 +10,7 @@ the client. Even after a successful checkout redirect we wait for the
 `checkout.session.completed` event before marking the user as active.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -56,7 +56,7 @@ async def me(user: AuthUser | None = Depends(optional_user)) -> dict:
     if row:
         status_str = row["status"]
         period_end = row["current_period_end"]
-        if status_str == "active" and period_end and period_end > datetime.now(timezone.utc):
+        if status_str == "active" and period_end and period_end > datetime.now(UTC):
             subscribed = True
 
     return {
@@ -146,7 +146,8 @@ async def _handle_checkout_completed(session: dict) -> None:
     async with acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO subscriptions (user_id, stripe_customer_id, stripe_subscription_id, status, updated_at)
+            INSERT INTO subscriptions
+              (user_id, stripe_customer_id, stripe_subscription_id, status, updated_at)
             VALUES ($1, $2, $3, 'incomplete', NOW())
             ON CONFLICT (user_id) DO UPDATE
               SET stripe_customer_id = EXCLUDED.stripe_customer_id,
@@ -177,14 +178,15 @@ async def _handle_subscription_change(sub: dict) -> None:
     status = sub.get("status", "none")
     period_end_ts = sub.get("current_period_end")
     period_end = (
-        datetime.fromtimestamp(period_end_ts, tz=timezone.utc) if period_end_ts else None
+        datetime.fromtimestamp(period_end_ts, tz=UTC) if period_end_ts else None
     )
 
     async with acquire() as conn:
         await conn.execute(
             """
             INSERT INTO subscriptions
-              (user_id, stripe_customer_id, stripe_subscription_id, status, current_period_end, updated_at)
+              (user_id, stripe_customer_id, stripe_subscription_id, status,
+               current_period_end, updated_at)
             VALUES ($1, $2, $3, $4, $5, NOW())
             ON CONFLICT (user_id) DO UPDATE
               SET stripe_customer_id = EXCLUDED.stripe_customer_id,

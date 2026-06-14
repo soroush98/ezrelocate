@@ -33,7 +33,6 @@ from etl._scrape import (
     PoliteClient,
     ScrapedListing,
     mark_stale,
-    normalise_province,
     parse_money,
     upsert_listings,
 )
@@ -194,7 +193,7 @@ def _listing_from_apollo(
     # price.amount is in cents.
     price_blob = listing.get("price") or {}
     cents = price_blob.get("amount") if isinstance(price_blob, dict) else None
-    monthly_rent = int(cents / 100) if isinstance(cents, (int, float)) else parse_money(price_blob)
+    monthly_rent = int(cents / 100) if isinstance(cents, int | float) else parse_money(price_blob)
 
     attrs = _flatten_attrs(listing.get("attributes"))
 
@@ -321,7 +320,11 @@ def _flatten_attrs(attrs) -> dict[str, str]:
             a.get("canonicalName") or a.get("machineKey") or a.get("name") or ""
         ).lower().replace("_", "")
         vals = a.get("canonicalValues") or a.get("values")
-        val = vals[0] if isinstance(vals, list) and vals else (a.get("machineValue") or a.get("value"))
+        val = (
+            vals[0]
+            if isinstance(vals, list) and vals
+            else (a.get("machineValue") or a.get("value"))
+        )
         if key and val is not None:
             flat[key] = str(val).lower()
     return flat
@@ -500,8 +503,8 @@ async def scrape(
 
     if dry_run:
         print(f"\ndry-run: parsed {len(batch)} listings (none written)")
-        for l in batch[:3]:
-            print(json.dumps(l.__dict__, indent=2, default=str))
+        for listing in batch[:3]:
+            print(json.dumps(listing.__dict__, indent=2, default=str))
         return
 
     await flush(batch)

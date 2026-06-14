@@ -5,6 +5,7 @@ Voyage AI. ``voyage-3-large`` outputs 1024-dim vectors, which matches the
 ``VECTOR(1024)`` columns in db/schema.sql.
 """
 
+import asyncio
 from typing import Literal
 
 import voyageai
@@ -13,6 +14,11 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from app.config import get_settings
 
 InputType = Literal["query", "document"]
+
+# Deadline for an interactive (request-path) embed. embed_texts retries with
+# exponential backoff, which is right for the nightly ETL but would let a single
+# /api/query hang for minutes — so the query path bounds it with this timeout.
+QUERY_EMBED_TIMEOUT_S = 20.0
 
 
 _client: voyageai.AsyncClient | None = None
@@ -45,5 +51,6 @@ async def embed_texts(
 
 
 async def embed_query(text: str) -> list[float]:
-    [vec] = await embed_texts([text], input_type="query")
+    async with asyncio.timeout(QUERY_EMBED_TIMEOUT_S):
+        [vec] = await embed_texts([text], input_type="query")
     return vec

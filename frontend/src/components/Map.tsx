@@ -15,6 +15,14 @@ const AMENITY_LABEL: Record<AmenityCategory, string> = {
 const fmtMeters = (m: number) =>
   m < 1000 ? `${m}m` : `${(m / 1000).toFixed(1)}km`;
 
+// POI names come from scraped OSM data, so escape them before they go into the
+// popup's setHTML — a name containing markup must never become live HTML.
+const HTML_ESCAPES: Record<string, string> = {
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+};
+const escapeHtml = (s: string) =>
+  s.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c] ?? c);
+
 const CANADA_CENTER: [number, number] = [-93.0, 49.2];
 
 // Carto Voyager is light + colourful enough to make pins pop, no API key.
@@ -175,7 +183,7 @@ export function ListingsMap({
         .setPopup(
           new maplibregl.Popup({ offset: 12, closeButton: false }).setHTML(
             `<div class="text-xs"><strong>${
-              p.name ?? AMENITY_LABEL[p.poi_type]
+              p.name ? escapeHtml(p.name) : AMENITY_LABEL[p.poi_type]
             }</strong><br/>` +
               `<span style="color:${AMENITY_COLOR[p.poi_type]}">${
                 AMENITY_LABEL[p.poi_type]

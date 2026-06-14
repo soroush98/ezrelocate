@@ -1,3 +1,4 @@
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -24,7 +25,6 @@ app = FastAPI(title="EZrelocate", version="0.1.0", lifespan=lifespan)
 # proxies server-side, so the browser only ever talks to the Vercel origin and
 # CORS isn't exercised. Set CORS_ORIGINS as a comma-separated env var if you
 # ever bypass the rewrite.
-import os
 cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 app.add_middleware(
     CORSMiddleware,

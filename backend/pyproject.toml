@@ -39,5 +39,16 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency markers are meant to be evaluated once as argument
+# defaults — not a B008 mutable-default-call bug.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query"]
+
+[tool.ruff.lint.per-file-ignores]
+# llm.py is dominated by long, deliberately-aligned LLM prompt text inside
+# triple-quoted strings; a line-length cap on prose isn't useful there.
+"app/services/llm.py" = ["E501"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
