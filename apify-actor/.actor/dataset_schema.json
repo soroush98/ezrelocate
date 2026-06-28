@@ -1,0 +1,44 @@
+{
+  "actorSpecification": 1,
+  "fields": {},
+  "views": {
+    "overview": {
+      "title": "Listings",
+      "transformation": {
+        "fields": [
+          "title",
+          "url",
+          "source",
+          "also_on",
+          "monthly_rent",
+          "bedrooms",
+          "bathrooms",
+          "property_type",
+          "address",
+          "city",
+          "province",
+          "available_from",
+          "amenity_distances_m"
+        ]
+      },
+      "display": {
+        "component": "table",
+        "properties": {
+          "title": { "label": "Title" },
+          "url": { "label": "Link" },
+          "source": { "label": "Source" },
+          "also_on": { "label": "Also on" },
+          "monthly_rent": { "label": "Rent ($/mo)" },
+          "bedrooms": { "label": "Beds" },
+          "bathrooms": { "label": "Baths" },
+          "property_type": { "label": "Type" },
+          "address": { "label": "Address" },
+          "city": { "label": "City" },
+          "province": { "label": "Prov" },
+          "available_from": { "label": "Available" },
+          "amenity_distances_m": { "label": "Amenities (m)" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "source": "EZrelocate pois table (Geofabrik-derived)",
+  "categories": [
+    "subway",
+    "train",
+    "bus_stop",
+    "grocery",
+    "cafe",
+    "pharmacy",
+    "park",
+    "school",
+    "university",
+    "library",
+    "gym",
+    "hospital"
+  ],
+  "counts": {
+    "subway": 964,
+    "train": 356,
+    "bus_stop": 101195,
+    "grocery": 14545,
+    "cafe": 10677,
+    "pharmacy": 5179,
+    "park": 64639,
+    "school": 14536,
+    "university": 921,
+    "library": 1683,
+    "gym": 6819,
+    "hospital": 3643
+  },
+  "total": 225157,
+  "bbox": {
+    "lat": [
+      42.20908737182617,
+      59.99802017211914
+    ],
+    "lng": [
+      -136.0242156982422,
+      -52.62358474731445
+    ]
+  },
+  "dtype": "float32",
+  "note": "Regenerate with tools/build_poi_index.py then `apify push`."
+}

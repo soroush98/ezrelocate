@@ -1,0 +1,194 @@
+{
+  "title": "Canadian Rentals — Unified & Geo-Enriched",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "sources": {
+      "title": "Sources",
+      "type": "array",
+      "description": "Which rental sites to scrape.",
+      "editor": "select",
+      "default": ["kijiji", "rentfaster"],
+      "prefill": ["kijiji", "rentfaster"],
+      "items": {
+        "type": "string",
+        "enum": ["kijiji", "rentfaster"],
+        "enumTitles": ["Kijiji", "RentFaster.ca"]
+      }
+    },
+    "cities": {
+      "title": "Cities",
+      "type": "array",
+      "description": "City names to cover (e.g. Toronto, Calgary). Leave empty for all supported cities.",
+      "editor": "stringList",
+      "default": [],
+      "prefill": ["Toronto", "Vancouver", "Calgary"]
+    },
+    "maxPerCity": {
+      "title": "Max listings per city (per source)",
+      "type": "integer",
+      "description": "Upper bound on listings collected from each city, for each source.",
+      "editor": "number",
+      "default": 100,
+      "minimum": 1,
+      "maximum": 5000
+    },
+    "maxResults": {
+      "title": "Max results (total)",
+      "type": "integer",
+      "description": "Hard cap on how many listings the run returns (after filtering + dedup). Raise it for bulk dataset pulls.",
+      "editor": "number",
+      "default": 50,
+      "prefill": 50,
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "minRent": {
+      "title": "Min rent ($/month)",
+      "type": "integer",
+      "description": "Keep only listings at or above this monthly rent.",
+      "editor": "number",
+      "minimum": 0
+    },
+    "maxRent": {
+      "title": "Max rent ($/month)",
+      "type": "integer",
+      "description": "Keep only listings at or below this monthly rent. e.g. 2500.",
+      "editor": "number",
+      "minimum": 0
+    },
+    "minBedrooms": {
+      "title": "Min bedrooms",
+      "type": "integer",
+      "description": "Minimum bedroom count. Use 0 to include bachelor/studio (stored as 0.5).",
+      "editor": "number",
+      "minimum": 0
+    },
+    "maxBedrooms": {
+      "title": "Max bedrooms",
+      "type": "integer",
+      "description": "Maximum bedroom count. For exactly 2-bed, set min and max both to 2.",
+      "editor": "number",
+      "minimum": 0
+    },
+    "keywords": {
+      "title": "Description must contain ALL of these",
+      "type": "array",
+      "description": "Case-insensitive substring match over title + description. ALL must be present. e.g. [\"female\"] for women-only, or [\"parking\",\"balcony\"].",
+      "editor": "stringList",
+      "default": []
+    },
+    "excludeKeywords": {
+      "title": "Description must contain NONE of these",
+      "type": "array",
+      "description": "Drop a listing if its title/description contains ANY of these. e.g. [\"no pets\",\"students only\"].",
+      "editor": "stringList",
+      "default": []
+    },
+    "nearAmenities": {
+      "title": "Near these amenity types",
+      "type": "array",
+      "description": "Keep only listings within the distance below of EACH selected amenity type (uses OpenStreetMap). Turns on amenity enrichment automatically.",
+      "editor": "select",
+      "default": [],
+      "items": {
+        "type": "string",
+        "enum": ["subway", "train", "bus_stop", "grocery", "cafe", "pharmacy", "park", "school", "university", "library", "gym", "hospital"]
+      }
+    },
+    "maxAmenityDistanceM": {
+      "title": "Max distance to amenity (m)",
+      "type": "integer",
+      "description": "Used with 'Near these amenity types'. 800 m ≈ a 10-minute walk.",
+      "editor": "number",
+      "default": 800,
+      "minimum": 100,
+      "maximum": 5000
+    },
+    "nearAddress": {
+      "title": "Near a specific address / place",
+      "type": "string",
+      "description": "Free-text address or place to anchor on, e.g. 'University of Toronto' or '200 Bay St, Toronto'. Geocoded, then listings are kept within the radius below. Use this for 'near my workplace' (amenity categories can't find a specific employer).",
+      "editor": "textfield"
+    },
+    "nearAddressRadiusM": {
+      "title": "Radius around that address (m)",
+      "type": "integer",
+      "description": "Used with 'Near a specific address'.",
+      "editor": "number",
+      "default": 2000,
+      "minimum": 100,
+      "maximum": 20000
+    },
+    "dedupe": {
+      "title": "Collapse cross-source duplicates",
+      "type": "boolean",
+      "description": "Merge the same unit posted to multiple sites into one row (records the extra site in `also_on`).",
+      "editor": "checkbox",
+      "default": true
+    },
+    "enrichAmenities": {
+      "title": "Attach nearest-amenity distances",
+      "type": "boolean",
+      "description": "Add `amenity_distances_m` (nearest subway/grocery/school/etc. in metres) from a bundled offline POI index — fast, free, no external API. Off by default. See README.",
+      "editor": "checkbox",
+      "default": false
+    },
+    "enrichRadiusM": {
+      "title": "Amenity search radius (m)",
+      "type": "integer",
+      "description": "Only used when amenity enrichment is on.",
+      "editor": "number",
+      "default": 1500,
+      "minimum": 250,
+      "maximum": 5000
+    },
+    "maxEnrich": {
+      "title": "Max listings to enrich",
+      "type": "integer",
+      "description": "Cap on how many listings are enriched per run. Only used when enrichment is on.",
+      "editor": "number",
+      "default": 200,
+      "minimum": 1,
+      "maximum": 5000
+    },
+    "maxConcurrency": {
+      "title": "Max concurrent requests",
+      "type": "integer",
+      "description": "Per-source request concurrency. Keep low to stay polite and avoid blocks.",
+      "editor": "number",
+      "default": 3,
+      "minimum": 1,
+      "maximum": 10
+    },
+    "minDelayMs": {
+      "title": "Min per-request delay (ms)",
+      "type": "integer",
+      "description": "Lower bound of the random delay inserted before each request (politeness).",
+      "editor": "number",
+      "default": 500
+    },
+    "maxDelayMs": {
+      "title": "Max per-request delay (ms)",
+      "type": "integer",
+      "description": "Upper bound of the random delay inserted before each request (politeness).",
+      "editor": "number",
+      "default": 1500
+    },
+    "userAgent": {
+      "title": "User-Agent override",
+      "type": "string",
+      "description": "Optional. Set a real contact string in production.",
+      "editor": "textfield"
+    },
+    "proxyConfiguration": {
+      "title": "Proxy",
+      "type": "object",
+      "description": "Both Kijiji and RentFaster block datacenter IPs (Cloudflare), so this defaults to RESIDENTIAL Canadian IPs, rotated per request. Residential proxy is metered (~$8/GB) and draws from your plan credit. Switch the group to datacenter to run free, but expect intermittent blocks.",
+      "editor": "proxy",
+      "default": { "useApifyProxy": true, "apifyProxyGroups": ["RESIDENTIAL"], "apifyProxyCountry": "CA" },
+      "prefill": { "useApifyProxy": true, "apifyProxyGroups": ["RESIDENTIAL"], "apifyProxyCountry": "CA" }
+    }
+  },
+  "required": ["sources"]
+}

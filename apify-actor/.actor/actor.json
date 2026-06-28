@@ -1,0 +1,15 @@
+{
+  "actorSpecification": 1,
+  "name": "kijiji-canada-rentals-scraper",
+  "title": "Kijiji & RentFaster Scraper — Canada Rental Listings + Geo Data",
+  "description": "Scrape Canadian rental listings from Kijiji and RentFaster.ca in one normalized schema — price, beds, baths, address, coordinates — with cross-source dedup and nearest-amenity (subway/grocery/school) distances. Apartments, condos, houses across Canada.",
+  "version": "0.1",
+  "meta": {
+    "templateId": "python-start"
+  },
+  "input": "./input_schema.json",
+  "dockerfile": "../Dockerfile",
+  "storages": {
+    "dataset": "./dataset_schema.json"
+  }
+}

@@ -1,0 +1,25 @@
+# Pinned to a runtime-verified, coherent set (Python 3.12).
+#
+# apify 2.7.3 -> crawlee 0.6.12, which is INCOMPATIBLE with:
+#   * pydantic >= 2.12   -> "cannot specify both default and default_factory"
+#   * browserforge >= 1.2.4 -> AttributeError: module 'browserforge.download'
+#                              has no attribute 'DATA_FILES'
+# Leaving these unpinned makes pip pull the latest and the Actor crashes on import
+# at runtime. These exact versions are verified to import + run together.
+apify==2.7.3
+crawlee==0.6.12
+pydantic>=2.10,<2.12
+browserforge==1.2.3
+
+# First-party scraping deps
+httpx>=0.28,<0.29
+selectolax>=0.3.27,<0.4
+tenacity>=9.0,<10.0
+# RentFaster sits behind a Cloudflare managed challenge that fingerprints the TLS
+# ClientHello (JA3) — plain httpx is 403'd no matter the headers/IP. curl_cffi
+# impersonates a real Chrome TLS+HTTP2 fingerprint and clears it. Ships its own
+# libcurl-impersonate, so no extra system deps. See src/polite_client.py.
+curl_cffi>=0.7,<1.0
+# Powers the bundled offline POI index (src/amenities_local.py): vectorised
+# nearest-amenity lookup over src/data/pois_ca.npz, replacing live Overpass calls.
+numpy>=1.26,<3

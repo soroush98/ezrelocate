@@ -1,0 +1,14 @@
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+storage
+apify_storage
+.mypy_cache
+README.md
+test_smoke.py
+harness_e2e.py
+live_check.py
+golden_set.py
